@@ -41,6 +41,8 @@ import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.StopOrderPreference
 import com.example.ruts.domain.StopType
 import com.example.ruts.ui.theme.AccentBlue
+import com.example.ruts.ui.theme.AccentPurple
+import com.example.ruts.ui.theme.stopAccentColor
 import com.example.ruts.ui.theme.Border
 import com.example.ruts.ui.theme.Error
 import com.example.ruts.ui.theme.RutsUi
@@ -114,6 +116,7 @@ fun StopDetailEditor(
                 SegmentedControl(
                     options = listOf("Entrega", "Recogida"),
                     selectedIndex = if (stop.stopType == StopType.Delivery) 0 else 1,
+                    selectedColor = stopAccentColor(stop.stopType),
                     onSelected = { index ->
                         onTypeChange(if (index == 0) StopType.Delivery else StopType.Pickup)
                     },
@@ -279,9 +282,10 @@ private fun StopTagsRow() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TagChip(label = "Default", dotColor = AccentBlue, selected = true)
-        TagChip(label = "Afternoon Pickup", dotColor = androidx.compose.ui.graphics.Color(0xFFBF5AF2), selected = false)
+        TagChip(label = "Afternoon Pickup", dotColor = AccentPurple, selected = false)
         listOf(
             AccentBlue,
+            AccentPurple,
             androidx.compose.ui.graphics.Color(0xFF64D2FF),
             androidx.compose.ui.graphics.Color(0xFF30D158),
             androidx.compose.ui.graphics.Color(0xFFFF9F0A),
@@ -427,6 +431,7 @@ private fun SegmentedControl(
     options: List<String>,
     selectedIndex: Int,
     onSelected: (Int) -> Unit,
+    selectedColor: androidx.compose.ui.graphics.Color = AccentBlue,
 ) {
     Row(
         modifier = Modifier
@@ -439,7 +444,7 @@ private fun SegmentedControl(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(if (selected) AccentBlue else SurfaceCard)
+                    .background(if (selected) selectedColor else SurfaceCard)
                     .clickable { onSelected(index) }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,

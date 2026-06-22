@@ -38,6 +38,7 @@ import com.example.ruts.domain.Route
 import com.example.ruts.domain.formatTime
 import com.example.ruts.domain.formatWeekday
 import com.example.ruts.ui.theme.AccentBlue
+import com.example.ruts.ui.theme.stopAccentColor
 import com.example.ruts.ui.theme.Border
 import com.example.ruts.ui.theme.SectionHeader
 import com.example.ruts.ui.theme.SurfaceCard
@@ -356,13 +357,13 @@ private fun StopOverviewRow(
         Box(
             modifier = Modifier
                 .clip(StopBadgeShape)
-                .background(AccentBlue.copy(alpha = 0.15f))
+                .background(stopAccentColor(stop.stopType).copy(alpha = 0.15f))
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             Text(
                 text = "A${stop.orderIndex + 1}",
                 style = MaterialTheme.typography.labelLarge,
-                color = AccentBlue,
+                color = stopAccentColor(stop.stopType),
                 fontWeight = FontWeight.SemiBold,
             )
         }

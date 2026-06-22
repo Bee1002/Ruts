@@ -24,6 +24,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.StopStatus
+import com.example.ruts.domain.StopType
+import com.example.ruts.ui.theme.pendingMarkerArgb
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
@@ -235,6 +237,7 @@ fun RouteMapView(
                             number = index + 1,
                             isActive = isActive,
                             status = stop.status,
+                            stopType = stop.stopType,
                             useBlueHighlight = drawRoutePath,
                         )
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
@@ -261,17 +264,17 @@ private fun createNumberedMarkerDrawable(
     number: Int,
     isActive: Boolean,
     status: StopStatus,
+    stopType: StopType,
     useBlueHighlight: Boolean = false,
 ): BitmapDrawable {
     val size = 96
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-    val activeColor = if (useBlueHighlight) Color.rgb(10, 132, 255) else Color.rgb(76, 175, 80)
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = when (status) {
             StopStatus.Delivered -> Color.rgb(142, 142, 147)
             StopStatus.Failed -> Color.rgb(229, 57, 53)
-            StopStatus.Pending -> if (isActive) activeColor else Color.rgb(255, 255, 255)
+            StopStatus.Pending -> pendingMarkerArgb(stopType, isActive, useBlueHighlight)
         }
         style = Paint.Style.FILL
     }

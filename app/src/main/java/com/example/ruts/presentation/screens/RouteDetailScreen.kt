@@ -34,6 +34,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +45,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import android.app.Activity
+import android.view.WindowManager
 import androidx.compose.ui.unit.dp
 import com.example.ruts.data.RouteRepository
 import com.example.ruts.domain.DeliveryStop
@@ -67,6 +71,7 @@ import com.example.ruts.domain.formatDistanceKm
 import com.example.ruts.presentation.components.RoutesDrawerContent
 import com.example.ruts.presentation.components.StopDetailEditor
 import com.example.ruts.ui.theme.Error
+import com.example.ruts.ui.theme.stopAccentColor
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -265,7 +270,21 @@ fun RouteDetailScreen(
                     null
                 }
 
+                val keepScreenAwake = orderedStops.isNotEmpty()
+                val view = LocalView.current
+
+                DisposableEffect(keepScreenAwake) {
+                    if (!keepScreenAwake) return@DisposableEffect onDispose { }
+
+                    val window = (view.context as? Activity)?.window
+                    window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    onDispose {
+                        window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+
                 BottomSheetScaffold(
+                    modifier = Modifier.fillMaxSize(),
                     scaffoldState = sheetState,
                     sheetPeekHeight = 280.dp,
                     containerColor = MaterialTheme.colorScheme.background,
@@ -656,7 +675,7 @@ private fun StopListItem(
                 text = "#${stop.orderIndex + 1}",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (isActive) {
-                    MaterialTheme.colorScheme.primary
+                    stopAccentColor(stop.stopType)
                 } else {
                     MaterialTheme.colorScheme.onSurface
                 },

@@ -62,6 +62,7 @@ import com.example.ruts.domain.formatDuration
 import com.example.ruts.domain.normalizeSpokenAddress
 import com.example.ruts.geocoding.AddressResult
 import com.example.ruts.geocoding.GeocodingHelper
+import com.example.ruts.geocoding.SearchBias
 import com.example.ruts.location.LocationHelper
 import com.example.ruts.presentation.components.CompactAddressSearchBar
 import com.example.ruts.presentation.components.ExpandedAddressSearchBar
@@ -105,6 +106,7 @@ fun RouteEditorScreen(
     var route by remember { mutableStateOf<Route?>(null) }
     var currentLocation by remember { mutableStateOf<GeoPoint?>(null) }
     var startAddress by remember { mutableStateOf<String?>(null) }
+    var searchBias by remember { mutableStateOf<SearchBias?>(null) }
     var searchExpanded by remember { mutableStateOf(false) }
     var selectedStopId by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
@@ -170,10 +172,15 @@ fun RouteEditorScreen(
 
     LaunchedEffect(route?.startLocation, currentLocation) {
         val location = route?.startLocation ?: currentLocation ?: return@LaunchedEffect
-        startAddress = geocodingHelper.reverseGeocode(location)
+        val result = geocodingHelper.reverseGeocodeResult(location)
+        startAddress = result?.address ?: geocodingHelper.reverseGeocode(location)
+        searchBias = SearchBias(
+            locality = result?.locality ?: searchBias?.locality,
+            anchor = location,
+        )
     }
 
-    LaunchedEffect(searchQuery, searchExpanded) {
+    LaunchedEffect(searchQuery, searchExpanded, searchBias) {
         searchJob?.cancel()
         if (!searchExpanded || searchQuery.length < 3) {
             searchResults = emptyList()
@@ -184,7 +191,7 @@ fun RouteEditorScreen(
         isSearching = true
         searchJob = scope.launch {
             delay(400)
-            searchResults = geocodingHelper.search(searchQuery)
+            searchResults = geocodingHelper.search(searchQuery, searchBias)
             isSearching = false
         }
     }
@@ -239,6 +246,10 @@ fun RouteEditorScreen(
         val updatedRoute = currentRoute.copy(stops = currentRoute.stops + newStop)
         route = updatedRoute
         repository.saveRoute(updatedRoute)
+        searchBias = SearchBias(
+            locality = result.locality ?: searchBias?.locality,
+            anchor = result.location,
+        )
         selectedStopId = newStop.id
         searchQuery = ""
         searchResults = emptyList()
