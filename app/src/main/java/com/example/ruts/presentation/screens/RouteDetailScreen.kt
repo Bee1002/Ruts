@@ -79,6 +79,7 @@ fun RouteDetailScreen(
 
     var route by remember { mutableStateOf<Route?>(null) }
     var allRoutes by remember { mutableStateOf(emptyList<Route>()) }
+    var selectedStopId by remember { mutableStateOf<String?>(null) }
 
     fun reload(routeToSelect: String = routeId) {
         allRoutes = repository.getAllRoutes()
@@ -90,6 +91,7 @@ fun RouteDetailScreen(
     }
 
     LaunchedEffect(routeId) {
+        selectedStopId = null
         reload()
     }
 
@@ -177,7 +179,10 @@ fun RouteDetailScreen(
 
             else -> {
                 val orderedStops = currentRoute.stops.sortedBy { it.orderIndex }
-                val activeStop = orderedStops.firstOrNull { it.status == StopStatus.Pending }
+                val selectedStop = orderedStops.firstOrNull { it.id == selectedStopId }
+                val nextPendingStop = orderedStops.firstOrNull { it.status == StopStatus.Pending }
+                val activeStop = selectedStop
+                    ?: nextPendingStop
                     ?: orderedStops.firstOrNull()
                 val startPoint = currentRoute.startLocation ?: GeoPoint(40.4168, -3.7038)
 
@@ -223,6 +228,7 @@ fun RouteDetailScreen(
                                             it.copy(status = StopStatus.Delivered, failureReason = "")
                                         }
                                     }
+                                    selectedStopId = null
                                 }
                             },
                             onFailed = {
@@ -235,10 +241,14 @@ fun RouteDetailScreen(
                                             )
                                         }
                                     }
+                                    selectedStopId = null
                                 }
                             },
                             onDeleteStop = { stop ->
                                 updateStops { stops -> stops.filterNot { it.id == stop.id } }
+                                if (selectedStopId == stop.id) {
+                                    selectedStopId = null
+                                }
                             },
                             onUpdateStop = { stopId, transform ->
                                 updateStops { stops ->
@@ -253,11 +263,7 @@ fun RouteDetailScreen(
                             },
                             onAddStop = { onEditRoute(currentRoute.id) },
                             onStopSelected = { selectedStop ->
-                                updateStops { stops ->
-                                    val selected = stops.first { it.id == selectedStop.id }
-                                    val remaining = stops.filterNot { it.id == selectedStop.id }
-                                    listOf(selected.copy(orderIndex = -1, status = StopStatus.Pending)) + remaining
-                                }
+                                selectedStopId = selectedStop.id
                             },
                         )
                     },
@@ -267,6 +273,7 @@ fun RouteDetailScreen(
                         startLocation = currentRoute.startLocation,
                         stops = orderedStops,
                         activeStopId = activeStop?.id,
+                        drawRoutePath = orderedStops.size > 1,
                         modifier = Modifier
                             .padding(innerPadding)
                             .fillMaxSize(),
@@ -422,34 +429,34 @@ private fun ActiveStopCard(
             onPackageCountChange = onPackageCountChange,
             onOrderPreferenceChange = { },
             onDelete = onDelete,
+            headerActions = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onNavigate,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Navegar")
+                    }
+                    OutlinedButton(
+                        onClick = onFailed,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
+                    ) {
+                        Text("Fallida")
+                    }
+                    Button(
+                        onClick = onDelivered,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Success,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                    ) {
+                        Text("Entregada")
+                    }
+                }
+            },
         )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = onDelivered,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Success,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                Text("Entregado")
-            }
-            Button(
-                onClick = onFailed,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
-            ) {
-                Text("Fallido")
-            }
-        }
-
-        OutlinedButton(onClick = onNavigate, modifier = Modifier.fillMaxWidth()) {
-            Text("Navegar en Google Maps")
-        }
     }
 }
 

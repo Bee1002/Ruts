@@ -16,12 +16,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
+import com.example.ruts.domain.StopStatus
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint as OsmGeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.gestures.RotationGestureOverlay
 
 private val MinimalStreetTileSource = XYTileSource(
@@ -41,6 +43,8 @@ fun RouteMapView(
     stops: List<DeliveryStop>,
     activeStopId: String?,
     modifier: Modifier = Modifier,
+    drawRoutePath: Boolean = false,
+    roundTrip: Boolean = true,
 ) {
     val context = LocalContext.current
 
@@ -48,13 +52,14 @@ fun RouteMapView(
         Configuration.getInstance().userAgentValue = context.packageName
     }
 
-    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation) {
+    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation, drawRoutePath) {
         buildString {
             append("active=$activeStopId")
+            append("|route=$drawRoutePath")
             append("|start=${startLocation?.latitude},${startLocation?.longitude}")
             append("|current=${currentLocation?.latitude},${currentLocation?.longitude}")
             stops.forEach { stop ->
-                append("|${stop.id}:${stop.location?.latitude},${stop.location?.longitude}")
+                append("|${stop.id}:${stop.status}:${stop.location?.latitude},${stop.location?.longitude}")
             }
         }
     }
@@ -115,7 +120,29 @@ fun RouteMapView(
         modifier = modifier,
         factory = { mapView },
         update = { map ->
-            map.overlays.removeAll { overlay -> overlay is Marker }
+            map.overlays.removeAll { overlay -> overlay is Marker || overlay is Polyline }
+
+            if (drawRoutePath && startLocation != null) {
+                val routePoints = buildList {
+                    add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
+                    stops.sortedBy { it.orderIndex }.forEach { stop ->
+                        val location = stop.location ?: return@forEach
+                        add(OsmGeoPoint(location.latitude, location.longitude))
+                    }
+                    if (roundTrip && stops.isNotEmpty()) {
+                        add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
+                    }
+                }
+
+                if (routePoints.size >= 2) {
+                    map.overlays += Polyline().apply {
+                        setPoints(routePoints)
+                        outlinePaint.color = Color.parseColor("#0A84FF")
+                        outlinePaint.strokeWidth = 14f
+                        outlinePaint.isAntiAlias = true
+                    }
+                }
+            }
 
             currentLocation?.let { location ->
                 map.overlays += Marker(map).apply {
@@ -144,6 +171,8 @@ fun RouteMapView(
                         resources = context.resources,
                         number = index + 1,
                         isActive = isActive,
+                        status = stop.status,
+                        useBlueHighlight = drawRoutePath,
                     )
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                 }
@@ -158,16 +187,26 @@ private fun createNumberedMarkerDrawable(
     resources: android.content.res.Resources,
     number: Int,
     isActive: Boolean,
+    status: StopStatus,
+    useBlueHighlight: Boolean = false,
 ): BitmapDrawable {
     val size = 96
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
+    val activeColor = if (useBlueHighlight) Color.rgb(10, 132, 255) else Color.rgb(76, 175, 80)
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (isActive) Color.rgb(76, 175, 80) else Color.rgb(255, 255, 255)
+        color = when (status) {
+            StopStatus.Delivered -> Color.rgb(142, 142, 147)
+            StopStatus.Failed -> Color.rgb(229, 57, 53)
+            StopStatus.Pending -> if (isActive) activeColor else Color.rgb(255, 255, 255)
+        }
         style = Paint.Style.FILL
     }
     val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (isActive) Color.WHITE else Color.BLACK
+        color = when {
+            status == StopStatus.Pending && !isActive -> Color.BLACK
+            else -> Color.WHITE
+        }
         textAlign = Paint.Align.CENTER
         textSize = 34f
         typeface = Typeface.DEFAULT_BOLD
@@ -179,10 +218,11 @@ private fun createNumberedMarkerDrawable(
     }
 
     canvas.drawCircle(size / 2f, size / 2.4f, 34f, fill)
-    if (isActive) {
+    if (isActive || status != StopStatus.Pending) {
         canvas.drawCircle(size / 2f, size / 2.4f, 34f, stroke)
     }
-    canvas.drawText(number.toString(), size / 2f, size / 2.4f + 12f, text)
+    val markerLabel = if (status == StopStatus.Failed) "X" else number.toString()
+    canvas.drawText(markerLabel, size / 2f, size / 2.4f + 12f, text)
 
     return BitmapDrawable(resources, bitmap)
 }

@@ -62,6 +62,7 @@ fun StopDetailEditor(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    headerActions: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -92,6 +93,8 @@ fun StopDetailEditor(
         }
 
         StopHeader(stop = stop)
+
+        headerActions?.invoke()
 
         StopTagsRow()
 

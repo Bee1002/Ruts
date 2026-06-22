@@ -10,7 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,29 +47,42 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import com.example.ruts.data.RouteRepository
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.Route
+import com.example.ruts.domain.RouteEstimator
 import com.example.ruts.domain.RouteOptimizer
+import com.example.ruts.domain.formatDuration
 import com.example.ruts.domain.displayLabel
 import com.example.ruts.geocoding.AddressResult
 import com.example.ruts.geocoding.GeocodingHelper
 import com.example.ruts.location.LocationHelper
 import com.example.ruts.presentation.components.CompactAddressSearchBar
 import com.example.ruts.presentation.components.ExpandedAddressSearchBar
+import com.example.ruts.presentation.components.OptimizedRouteOverview
+import com.example.ruts.presentation.components.RouteOptimizationOverlay
 import com.example.ruts.presentation.components.RouteMapView
-import com.example.ruts.presentation.components.RouteStopsOverview
 import com.example.ruts.presentation.components.StopDetailEditor
+import com.example.ruts.presentation.components.RouteStopsOverview
+import androidx.compose.ui.unit.dp
 import com.example.ruts.ui.theme.RutsUi
+import com.example.ruts.ui.theme.Success
 import com.example.ruts.ui.theme.SurfaceCard
 import com.example.ruts.ui.theme.TextSecondary
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
+
+private enum class OptimizationUiState {
+    Idle,
+    Optimizing,
+    Optimized,
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +108,7 @@ fun RouteEditorScreen(
     var searchResults by remember { mutableStateOf<List<AddressResult>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
+    var optimizationState by remember { mutableStateOf(OptimizationUiState.Idle) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -251,15 +267,60 @@ fun RouteEditorScreen(
     fun optimizeRoute() {
         val currentRoute = route ?: return
         val startPoint = currentRoute.startLocation ?: currentLocation ?: return
-        val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
-        val updatedRoute = currentRoute.copy(stops = optimized)
-        route = updatedRoute
-        repository.saveRoute(updatedRoute)
+        if (currentRoute.stops.size < 2) return
+
+        optimizationState = OptimizationUiState.Optimizing
+
+        scope.launch {
+            val optimizedDeferred = async {
+                RouteOptimizer.optimize(currentRoute.stops, startPoint)
+            }
+            delay(2500)
+            val optimizedStops = optimizedDeferred.await()
+            val updatedRoute = currentRoute.copy(stops = optimizedStops)
+            route = updatedRoute
+            repository.saveRoute(updatedRoute)
+            optimizationState = OptimizationUiState.Optimized
+            sheetState.bottomSheetState.partialExpand()
+        }
+    }
+
+    fun adjustOptimizedRoute() {
+        optimizationState = OptimizationUiState.Idle
+        scope.launch { sheetState.bottomSheetState.expand() }
+    }
+
+    fun confirmOptimizedRoute() {
+        optimizationState = OptimizationUiState.Idle
+        onFinished()
     }
 
     val currentRoute = route
     val selectedStop = currentRoute?.stops?.firstOrNull { it.id == selectedStopId }
     val isSheetExpanded = sheetState.bottomSheetState.currentValue == SheetValue.Expanded
+    val isOptimizedView = optimizationState == OptimizationUiState.Optimized
+    val startPoint = currentRoute?.startLocation ?: currentLocation
+    val orderedStops = currentRoute?.stops?.sortedBy { it.orderIndex } ?: emptyList()
+    val optimizedDurationMinutes = if (startPoint != null && orderedStops.isNotEmpty()) {
+        RouteEstimator.estimatedDurationMinutes(orderedStops, startPoint)
+    } else {
+        0
+    }
+    val optimizedDistanceKm = if (startPoint != null && orderedStops.isNotEmpty()) {
+        RouteEstimator.totalDistanceKm(orderedStops, startPoint)
+    } else {
+        0.0
+    }
+    val arrivalTimes = if (startPoint != null && currentRoute != null && isOptimizedView) {
+        RouteEstimator.arrivalTimesMillis(currentRoute.createdAtMillis, startPoint, orderedStops)
+    } else {
+        emptyList()
+    }
+    val highlightedStopId = when {
+        selectedStop != null -> selectedStop.id
+        isOptimizedView -> orderedStops.firstOrNull()?.id
+        else -> null
+    }
 
     LaunchedEffect(currentRoute?.stops?.size) {
         if (selectedStopId == null && currentRoute?.stops?.isNotEmpty() == true && !searchExpanded) {
@@ -281,32 +342,71 @@ fun RouteEditorScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                Button(
-                    onClick = {
-                        searchExpanded = false
-                        onFinished()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = RutsUi.primaryButtonColors,
-                ) {
-                    Text(
-                        if (currentRoute.stops.isEmpty()) {
-                            "Continuar sin paradas"
-                        } else {
-                            "Continuar con la ruta"
-                        },
-                    )
+            when {
+                optimizationState == OptimizationUiState.Optimizing -> Unit
+
+                isOptimizedView -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = formatDuration(optimizedDurationMinutes),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Success,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedButton(
+                            onClick = ::adjustOptimizedRoute,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Ajustar")
+                        }
+                        Button(
+                            onClick = ::confirmOptimizedRoute,
+                            modifier = Modifier.weight(1f),
+                            colors = RutsUi.primaryButtonColors,
+                        ) {
+                            Text("Confirmar")
+                        }
+                    }
+                }
+
+                else -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Button(
+                            onClick = {
+                                searchExpanded = false
+                                onFinished()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = RutsUi.primaryButtonColors,
+                        ) {
+                            Text(
+                                if (currentRoute.stops.isEmpty()) {
+                                    "Continuar sin paradas"
+                                } else {
+                                    "Continuar con la ruta"
+                                },
+                            )
+                        }
+                    }
                 }
             }
         },
     ) { scaffoldPadding ->
-        BottomSheetScaffold(
+        Box(modifier = Modifier.padding(scaffoldPadding)) {
+            BottomSheetScaffold(
             modifier = Modifier.padding(scaffoldPadding),
             scaffoldState = sheetState,
             sheetPeekHeight = collapsedPeek,
@@ -366,7 +466,7 @@ fun RouteEditorScreen(
                         .fillMaxSize()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 ) {
-                    if (!searchExpanded && (currentRoute.stops.isEmpty() || isSheetExpanded || selectedStop != null)) {
+                    if (!searchExpanded && (isOptimizedView || currentRoute.stops.isEmpty() || isSheetExpanded || selectedStop != null)) {
                         CompactAddressSearchBar(
                             onOpenExpanded = {
                                 searchExpanded = true
@@ -405,6 +505,17 @@ fun RouteEditorScreen(
 
                         when {
                             searchExpanded -> Unit
+
+                            isOptimizedView -> {
+                                OptimizedRouteOverview(
+                                    route = currentRoute,
+                                    startAddress = startAddress,
+                                    durationMinutes = optimizedDurationMinutes,
+                                    distanceKm = optimizedDistanceKm,
+                                    arrivalTimes = arrivalTimes,
+                                    isSheetExpanded = isSheetExpanded,
+                                )
+                            }
 
                             selectedStop != null -> {
                                 StopDetailEditor(
@@ -483,10 +594,16 @@ fun RouteEditorScreen(
                 currentLocation = currentLocation,
                 startLocation = currentRoute.startLocation ?: currentLocation,
                 stops = currentRoute.stops,
-                activeStopId = selectedStop?.id,
+                activeStopId = highlightedStopId,
+                drawRoutePath = isOptimizedView,
                 modifier = Modifier
                     .padding(innerPadding)
                     .fillMaxSize(),
+            )
+        }
+
+            RouteOptimizationOverlay(
+                visible = optimizationState == OptimizationUiState.Optimizing,
             )
         }
     }
