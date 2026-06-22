@@ -55,10 +55,15 @@ import com.example.ruts.domain.StopType
 import com.example.ruts.domain.displayLabel
 import com.example.ruts.domain.formatTime
 import com.example.ruts.domain.RouteEstimator
+import com.example.ruts.geocoding.GeocodingHelper
 import com.example.ruts.maps.MapsNavigator
 import com.example.ruts.presentation.components.CompletedStopDetailView
 import com.example.ruts.presentation.components.PendingStopWorkView
+import com.example.ruts.presentation.components.RouteCompletedView
+import com.example.ruts.presentation.components.extractPostalCode
+import com.example.ruts.presentation.components.RouteCompletionSummaryView
 import com.example.ruts.presentation.components.RouteMapView
+import com.example.ruts.domain.formatDistanceKm
 import com.example.ruts.presentation.components.RoutesDrawerContent
 import com.example.ruts.presentation.components.StopDetailEditor
 import com.example.ruts.ui.theme.Error
@@ -79,11 +84,17 @@ fun RouteDetailScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val sheetState = rememberBottomSheetScaffoldState()
 
+    val geocodingHelper = remember { GeocodingHelper(context) }
+
     var route by remember { mutableStateOf<Route?>(null) }
     var allRoutes by remember { mutableStateOf(emptyList<Route>()) }
     var selectedStopId by remember { mutableStateOf<String?>(null) }
     var statusChangedAtMillis by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
     var editingStopId by remember { mutableStateOf<String?>(null) }
+    var showRouteCompleted by remember { mutableStateOf(false) }
+    var showRouteSummary by remember { mutableStateOf(false) }
+    var routeCompletedAtMillis by remember { mutableStateOf<Long?>(null) }
+    var startAddress by remember { mutableStateOf<String?>(null) }
 
     fun reload(routeToSelect: String = routeId) {
         allRoutes = repository.getAllRoutes()
@@ -97,7 +108,15 @@ fun RouteDetailScreen(
     LaunchedEffect(routeId) {
         selectedStopId = null
         editingStopId = null
+        showRouteCompleted = false
+        showRouteSummary = false
+        routeCompletedAtMillis = null
         reload()
+    }
+
+    LaunchedEffect(route?.startLocation) {
+        val location = route?.startLocation ?: return@LaunchedEffect
+        startAddress = geocodingHelper.reverseGeocode(location)
     }
 
     fun persist(updatedRoute: Route) {
@@ -186,17 +205,42 @@ fun RouteDetailScreen(
                 val orderedStops = currentRoute.stops.sortedBy { it.orderIndex }
                 val selectedStop = orderedStops.firstOrNull { it.id == selectedStopId }
                 val nextPendingStop = orderedStops.firstOrNull { it.status == StopStatus.Pending }
+                val allStopsResolved = orderedStops.isNotEmpty() && nextPendingStop == null
                 val viewingResolvedStop = selectedStop != null && selectedStop.status != StopStatus.Pending
                 val activeStop = when {
+                    allStopsResolved && selectedStopId == null -> null
                     viewingResolvedStop -> selectedStop
                     selectedStop != null -> selectedStop
-                    else -> nextPendingStop ?: orderedStops.firstOrNull()
+                    else -> nextPendingStop
                 }
                 val startPoint = currentRoute.startLocation ?: GeoPoint(40.4168, -3.7038)
+                val resolvedStartAddress = startAddress ?: "Ubicación de inicio"
+
+                LaunchedEffect(allStopsResolved) {
+                    if (allStopsResolved) {
+                        if (routeCompletedAtMillis == null) {
+                            routeCompletedAtMillis = System.currentTimeMillis()
+                        }
+                        if (selectedStopId == null) {
+                            showRouteCompleted = true
+                            sheetState.bottomSheetState.expand()
+                        }
+                    } else {
+                        showRouteCompleted = false
+                        showRouteSummary = false
+                        routeCompletedAtMillis = null
+                    }
+                }
+
+                val routeDistanceLabel = formatDistanceKm(
+                    RouteEstimator.totalDistanceKm(orderedStops, startPoint),
+                )
 
                 fun selectStop(stopId: String) {
                     selectedStopId = stopId
                     editingStopId = null
+                    showRouteCompleted = false
+                    showRouteSummary = false
                     scope.launch { sheetState.bottomSheetState.expand() }
                 }
 
@@ -252,6 +296,12 @@ fun RouteDetailScreen(
                             route = currentRoute,
                             activeStop = activeStop,
                             viewingResolvedStop = viewingResolvedStop,
+                            showRouteCompleted = showRouteCompleted && allStopsResolved,
+                            showRouteSummary = showRouteSummary && allStopsResolved,
+                            routeCompletedAtMillis = routeCompletedAtMillis,
+                            routeDistanceLabel = routeDistanceLabel,
+                            arrivalAddress = resolvedStartAddress,
+                            arrivalPostalCode = extractPostalCode(resolvedStartAddress),
                             isStopFocused = selectedStopId != null,
                             activeStopSubtitle = activeStopSubtitle,
                             editingStopId = editingStopId,
@@ -321,6 +371,21 @@ fun RouteDetailScreen(
                             },
                             onAddStop = { onEditRoute(currentRoute.id) },
                             onStopSelected = { selectedStop -> selectStop(selectedStop.id) },
+                            onNavigateToStart = {
+                                MapsNavigator.openNavigationToPoint(context, startPoint)
+                            },
+                            onAcknowledgeRouteCompleted = {
+                                showRouteCompleted = false
+                                showRouteSummary = true
+                                scope.launch { sheetState.bottomSheetState.expand() }
+                            },
+                            onCloseRouteCompleted = { showRouteCompleted = false },
+                            onEditArrivalPoint = { onEditRoute(currentRoute.id) },
+                            onCopyStopsToNewRoute = {
+                                val newRoute = repository.duplicateRouteWithStops(currentRoute)
+                                onEditRoute(newRoute.id)
+                            },
+                            onCreateNewRoute = onCreateRoute,
                         )
                     },
                 ) { innerPadding ->
@@ -331,6 +396,11 @@ fun RouteDetailScreen(
                         activeStopId = activeStop?.id,
                         drawRoutePath = orderedStops.size > 1,
                         onStopClick = ::selectStop,
+                        focusPoint = if (showRouteCompleted && allStopsResolved && selectedStopId == null) {
+                            startPoint
+                        } else {
+                            null
+                        },
                         modifier = Modifier
                             .padding(innerPadding)
                             .fillMaxSize(),
@@ -381,6 +451,12 @@ private fun RouteWorkSheet(
     route: Route,
     activeStop: DeliveryStop?,
     viewingResolvedStop: Boolean,
+    showRouteCompleted: Boolean,
+    showRouteSummary: Boolean,
+    routeCompletedAtMillis: Long?,
+    routeDistanceLabel: String,
+    arrivalAddress: String,
+    arrivalPostalCode: String?,
     isStopFocused: Boolean,
     activeStopSubtitle: String?,
     editingStopId: String?,
@@ -397,6 +473,12 @@ private fun RouteWorkSheet(
     onOptimize: () -> Unit,
     onAddStop: () -> Unit,
     onStopSelected: (DeliveryStop) -> Unit,
+    onNavigateToStart: () -> Unit,
+    onAcknowledgeRouteCompleted: () -> Unit,
+    onCloseRouteCompleted: () -> Unit,
+    onEditArrivalPoint: () -> Unit,
+    onCopyStopsToNewRoute: () -> Unit,
+    onCreateNewRoute: () -> Unit,
 ) {
     val delivered = route.stops.count { it.status == StopStatus.Delivered }
     val failed = route.stops.count { it.status == StopStatus.Failed }
@@ -410,7 +492,26 @@ private fun RouteWorkSheet(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (viewingResolvedStop && activeStop != null) {
+        if (showRouteSummary && routeCompletedAtMillis != null) {
+            RouteCompletionSummaryView(
+                stops = orderedStops,
+                arrivalAddress = arrivalAddress,
+                finishedAtMillis = routeCompletedAtMillis,
+                distanceLabel = routeDistanceLabel,
+                onCopyStopsToNewRoute = onCopyStopsToNewRoute,
+                onCreateNewRoute = onCreateNewRoute,
+            )
+        } else if (showRouteCompleted && routeCompletedAtMillis != null) {
+            RouteCompletedView(
+                arrivalAddress = arrivalAddress,
+                arrivalTimeMillis = routeCompletedAtMillis,
+                postalCode = arrivalPostalCode,
+                onNavigate = onNavigateToStart,
+                onAcknowledge = onAcknowledgeRouteCompleted,
+                onEditArrivalPoint = onEditArrivalPoint,
+                onClose = onCloseRouteCompleted,
+            )
+        } else if (viewingResolvedStop && activeStop != null) {
             if (editingStopId == activeStop.id) {
                 StopDetailEditor(
                     stop = activeStop,
@@ -508,7 +609,7 @@ private fun RouteWorkSheet(
             }
         }
 
-        if (!viewingResolvedStop && !isStopFocused && editingStopId == null) {
+        if (!showRouteCompleted && !showRouteSummary && !viewingResolvedStop && !isStopFocused && editingStopId == null) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             Text("Paradas organizadas", style = MaterialTheme.typography.titleSmall)
 

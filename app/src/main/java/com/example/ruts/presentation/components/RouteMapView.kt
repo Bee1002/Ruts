@@ -36,6 +36,9 @@ private val MinimalStreetTileSource = XYTileSource(
     "© CARTO © OpenStreetMap contributors",
 )
 
+private const val ACTIVE_STOP_ZOOM = 16.0
+private const val OVERVIEW_ZOOM = 15.0
+
 @Composable
 fun RouteMapView(
     currentLocation: GeoPoint?,
@@ -46,6 +49,7 @@ fun RouteMapView(
     drawRoutePath: Boolean = false,
     roundTrip: Boolean = true,
     onStopClick: ((String) -> Unit)? = null,
+    focusPoint: GeoPoint? = null,
 ) {
     val context = LocalContext.current
 
@@ -53,9 +57,10 @@ fun RouteMapView(
         Configuration.getInstance().userAgentValue = context.packageName
     }
 
-    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation, drawRoutePath) {
+    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation, drawRoutePath, focusPoint) {
         buildString {
             append("active=$activeStopId")
+            append("|focus=${focusPoint?.latitude},${focusPoint?.longitude}")
             append("|route=$drawRoutePath")
             append("|start=${startLocation?.latitude},${startLocation?.longitude}")
             append("|current=${currentLocation?.latitude},${currentLocation?.longitude}")
@@ -93,6 +98,16 @@ fun RouteMapView(
     }
 
     LaunchedEffect(cameraSignature) {
+        val activeStop = stops.firstOrNull { it.id == activeStopId }
+        val activePoint = activeStop?.location ?: focusPoint
+
+        if (activePoint != null) {
+            val target = OsmGeoPoint(activePoint.latitude, activePoint.longitude)
+            mapView.controller.animateTo(target)
+            mapView.controller.setZoom(ACTIVE_STOP_ZOOM)
+            return@LaunchedEffect
+        }
+
         val stopLocations = stops.mapNotNull { it.location }
         val points = buildList {
             currentLocation?.let { add(it) }
@@ -107,7 +122,7 @@ fun RouteMapView(
         if (points.size == 1) {
             val point = points.first()
             mapView.controller.setCenter(OsmGeoPoint(point.latitude, point.longitude))
-            mapView.controller.setZoom(15.0)
+            mapView.controller.setZoom(OVERVIEW_ZOOM)
             return@LaunchedEffect
         }
 

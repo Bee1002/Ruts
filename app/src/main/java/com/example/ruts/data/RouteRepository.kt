@@ -66,6 +66,27 @@ class RouteRepository(context: Context) {
         return route
     }
 
+    fun duplicateRouteWithStops(source: Route, createdAtMillis: Long = System.currentTimeMillis()): Route {
+        val copiedStops = source.stops
+            .sortedBy { it.orderIndex }
+            .mapIndexed { index, stop ->
+                stop.copy(
+                    id = java.util.UUID.randomUUID().toString(),
+                    orderIndex = index,
+                    status = StopStatus.Pending,
+                    failureReason = "",
+                )
+            }
+
+        val route = Route(
+            createdAtMillis = createdAtMillis,
+            startLocation = source.startLocation,
+            stops = copiedStops,
+        )
+        saveRoute(route)
+        return route
+    }
+
     private fun persistRoutes(routes: List<Route>) {
         val payload = JSONArray()
         routes.forEach { route -> payload.put(route.toJson()) }
