@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
@@ -54,12 +53,15 @@ import com.example.ruts.domain.RouteOptimizer
 import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
 import com.example.ruts.domain.displayLabel
+import com.example.ruts.domain.formatTime
+import com.example.ruts.domain.RouteEstimator
 import com.example.ruts.maps.MapsNavigator
+import com.example.ruts.presentation.components.CompletedStopDetailView
+import com.example.ruts.presentation.components.PendingStopWorkView
 import com.example.ruts.presentation.components.RouteMapView
 import com.example.ruts.presentation.components.RoutesDrawerContent
 import com.example.ruts.presentation.components.StopDetailEditor
 import com.example.ruts.ui.theme.Error
-import com.example.ruts.ui.theme.Success
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,6 +82,8 @@ fun RouteDetailScreen(
     var route by remember { mutableStateOf<Route?>(null) }
     var allRoutes by remember { mutableStateOf(emptyList<Route>()) }
     var selectedStopId by remember { mutableStateOf<String?>(null) }
+    var statusChangedAtMillis by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    var editingStopId by remember { mutableStateOf<String?>(null) }
 
     fun reload(routeToSelect: String = routeId) {
         allRoutes = repository.getAllRoutes()
@@ -92,6 +96,7 @@ fun RouteDetailScreen(
 
     LaunchedEffect(routeId) {
         selectedStopId = null
+        editingStopId = null
         reload()
     }
 
@@ -181,10 +186,40 @@ fun RouteDetailScreen(
                 val orderedStops = currentRoute.stops.sortedBy { it.orderIndex }
                 val selectedStop = orderedStops.firstOrNull { it.id == selectedStopId }
                 val nextPendingStop = orderedStops.firstOrNull { it.status == StopStatus.Pending }
-                val activeStop = selectedStop
-                    ?: nextPendingStop
-                    ?: orderedStops.firstOrNull()
+                val viewingResolvedStop = selectedStop != null && selectedStop.status != StopStatus.Pending
+                val activeStop = when {
+                    viewingResolvedStop -> selectedStop
+                    selectedStop != null -> selectedStop
+                    else -> nextPendingStop ?: orderedStops.firstOrNull()
+                }
                 val startPoint = currentRoute.startLocation ?: GeoPoint(40.4168, -3.7038)
+
+                fun selectStop(stopId: String) {
+                    selectedStopId = stopId
+                    editingStopId = null
+                    scope.launch { sheetState.bottomSheetState.expand() }
+                }
+
+                fun clearStopSelection() {
+                    selectedStopId = null
+                    editingStopId = null
+                }
+
+                val activeStopSubtitle = if (activeStop != null) {
+                    val position = activeStop.orderIndex + 1
+                    val arrivalMillis = RouteEstimator.arrivalTimesMillis(
+                        currentRoute.createdAtMillis,
+                        startPoint,
+                        orderedStops,
+                    ).firstOrNull { it.first.id == activeStop.id }?.second
+                    if (arrivalMillis != null) {
+                        "$position/${orderedStops.size}, ${formatTime(arrivalMillis)}"
+                    } else {
+                        "$position/${orderedStops.size}"
+                    }
+                } else {
+                    null
+                }
 
                 BottomSheetScaffold(
                     scaffoldState = sheetState,
@@ -216,6 +251,11 @@ fun RouteDetailScreen(
                         RouteWorkSheet(
                             route = currentRoute,
                             activeStop = activeStop,
+                            viewingResolvedStop = viewingResolvedStop,
+                            isStopFocused = selectedStopId != null,
+                            activeStopSubtitle = activeStopSubtitle,
+                            editingStopId = editingStopId,
+                            activeStatusChangedAtMillis = statusChangedAtMillis[activeStop?.id],
                             onNavigate = {
                                 if (activeStop != null) {
                                     MapsNavigator.openNavigation(context, activeStop)
@@ -228,7 +268,8 @@ fun RouteDetailScreen(
                                             it.copy(status = StopStatus.Delivered, failureReason = "")
                                         }
                                     }
-                                    selectedStopId = null
+                                    statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
+                                    clearStopSelection()
                                 }
                             },
                             onFailed = {
@@ -241,11 +282,28 @@ fun RouteDetailScreen(
                                             )
                                         }
                                     }
-                                    selectedStopId = null
+                                    statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
+                                    clearStopSelection()
                                 }
                             },
+                            onUndoStatus = {
+                                activeStop?.let { stop ->
+                                    updateStops { stops ->
+                                        stops.updateStop(stop.id) {
+                                            it.copy(status = StopStatus.Pending, failureReason = "")
+                                        }
+                                    }
+                                    statusChangedAtMillis = statusChangedAtMillis - stop.id
+                                    selectedStopId = stop.id
+                                    editingStopId = null
+                                }
+                            },
+                            onCloseResolvedStop = ::clearStopSelection,
+                            onEditStop = { stopId -> editingStopId = stopId },
+                            onCancelEdit = { editingStopId = null },
                             onDeleteStop = { stop ->
                                 updateStops { stops -> stops.filterNot { it.id == stop.id } }
+                                statusChangedAtMillis = statusChangedAtMillis - stop.id
                                 if (selectedStopId == stop.id) {
                                     selectedStopId = null
                                 }
@@ -262,9 +320,7 @@ fun RouteDetailScreen(
                                 persist(currentRoute.copy(stops = optimized))
                             },
                             onAddStop = { onEditRoute(currentRoute.id) },
-                            onStopSelected = { selectedStop ->
-                                selectedStopId = selectedStop.id
-                            },
+                            onStopSelected = { selectedStop -> selectStop(selectedStop.id) },
                         )
                     },
                 ) { innerPadding ->
@@ -274,6 +330,7 @@ fun RouteDetailScreen(
                         stops = orderedStops,
                         activeStopId = activeStop?.id,
                         drawRoutePath = orderedStops.size > 1,
+                        onStopClick = ::selectStop,
                         modifier = Modifier
                             .padding(innerPadding)
                             .fillMaxSize(),
@@ -323,9 +380,18 @@ private fun MissingRouteState() {
 private fun RouteWorkSheet(
     route: Route,
     activeStop: DeliveryStop?,
+    viewingResolvedStop: Boolean,
+    isStopFocused: Boolean,
+    activeStopSubtitle: String?,
+    editingStopId: String?,
+    activeStatusChangedAtMillis: Long?,
     onNavigate: () -> Unit,
     onDelivered: () -> Unit,
     onFailed: () -> Unit,
+    onUndoStatus: () -> Unit,
+    onCloseResolvedStop: () -> Unit,
+    onEditStop: (String) -> Unit,
+    onCancelEdit: () -> Unit,
     onDeleteStop: (DeliveryStop) -> Unit,
     onUpdateStop: (String, (DeliveryStop) -> DeliveryStop) -> Unit,
     onOptimize: () -> Unit,
@@ -336,6 +402,7 @@ private fun RouteWorkSheet(
     val failed = route.stops.count { it.status == StopStatus.Failed }
     val pending = route.stops.count { it.status == StopStatus.Pending }
     val orderedStops = route.stops.sortedBy { it.orderIndex }
+    val totalStops = orderedStops.size
 
     Column(
         modifier = Modifier
@@ -343,120 +410,124 @@ private fun RouteWorkSheet(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Ruta de trabajo", style = MaterialTheme.typography.titleMedium)
-        Text(
-            text = "Pendientes: $pending · Entregadas: $delivered · Fallidas: $failed",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        if (activeStop != null) {
-            ActiveStopCard(
-                stop = activeStop,
-                onNavigate = onNavigate,
-                onDelivered = onDelivered,
-                onFailed = onFailed,
-                onDelete = { onDeleteStop(activeStop) },
-                onNotesChange = { notes ->
-                    onUpdateStop(activeStop.id) { it.copy(notes = notes) }
-                },
-                onTypeChange = { type ->
-                    onUpdateStop(activeStop.id) { it.copy(stopType = type) }
-                },
-                onPackageCountChange = { count ->
-                    onUpdateStop(activeStop.id) { it.copy(packageCount = count.coerceAtLeast(1)) }
-                },
-            )
+        if (viewingResolvedStop && activeStop != null) {
+            if (editingStopId == activeStop.id) {
+                StopDetailEditor(
+                    stop = activeStop,
+                    onNotesChange = { notes ->
+                        onUpdateStop(activeStop.id) { it.copy(notes = notes) }
+                    },
+                    onTypeChange = { type ->
+                        onUpdateStop(activeStop.id) { it.copy(stopType = type) }
+                    },
+                    onPackageCountChange = { count ->
+                        onUpdateStop(activeStop.id) { it.copy(packageCount = count.coerceAtLeast(1)) }
+                    },
+                    onOrderPreferenceChange = { },
+                    onDelete = { onDeleteStop(activeStop) },
+                    onBack = onCancelEdit,
+                )
+            } else {
+                CompletedStopDetailView(
+                    stop = activeStop,
+                    stopPosition = activeStop.orderIndex + 1,
+                    totalStops = totalStops,
+                    statusChangedAtMillis = activeStatusChangedAtMillis,
+                    onClose = onCloseResolvedStop,
+                    onUndo = onUndoStatus,
+                    onNavigate = onNavigate,
+                    onEdit = { onEditStop(activeStop.id) },
+                    onDelete = { onDeleteStop(activeStop) },
+                )
+            }
         } else {
-            RutsCard(modifier = Modifier.fillMaxWidth()) {
+            if (!isStopFocused) {
+                Text("Ruta de trabajo", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    text = "Agrega paradas para empezar.",
-                    modifier = Modifier.padding(16.dp),
+                    text = "Pendientes: $pending · Entregadas: $delivered · Fallidas: $failed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = onOptimize,
-                modifier = Modifier.weight(1f),
-                enabled = route.stops.size > 1,
-            ) {
-                Text("Optimizar")
-            }
-            OutlinedButton(onClick = onAddStop, modifier = Modifier.weight(1f)) {
-                Text("Agregar parada")
-            }
-        }
+            when {
+                activeStop != null && activeStop.status == StopStatus.Pending && editingStopId == activeStop.id -> {
+                    StopDetailEditor(
+                        stop = activeStop,
+                        onNotesChange = { notes ->
+                            onUpdateStop(activeStop.id) { it.copy(notes = notes) }
+                        },
+                        onTypeChange = { type ->
+                            onUpdateStop(activeStop.id) { it.copy(stopType = type) }
+                        },
+                        onPackageCountChange = { count ->
+                            onUpdateStop(activeStop.id) { it.copy(packageCount = count.coerceAtLeast(1)) }
+                        },
+                        onOrderPreferenceChange = { },
+                        onDelete = { onDeleteStop(activeStop) },
+                        onBack = onCancelEdit,
+                    )
+                }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        Text("Paradas organizadas", style = MaterialTheme.typography.titleSmall)
+                activeStop != null && activeStop.status == StopStatus.Pending -> {
+                    PendingStopWorkView(
+                        stop = activeStop,
+                        stopPosition = activeStop.orderIndex + 1,
+                        totalStops = totalStops,
+                        subtitle = activeStopSubtitle,
+                        onNavigate = onNavigate,
+                        onDelivered = onDelivered,
+                        onFailed = onFailed,
+                        onEdit = { onEditStop(activeStop.id) },
+                        onDelete = { onDeleteStop(activeStop) },
+                        onClose = if (isStopFocused) onCloseResolvedStop else null,
+                    )
+                }
 
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 320.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(orderedStops, key = { it.id }) { stop ->
-                StopListItem(
-                    stop = stop,
-                    isActive = stop.id == activeStop?.id,
-                    onClick = { onStopSelected(stop) },
-                    onDelete = { onDeleteStop(stop) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActiveStopCard(
-    stop: DeliveryStop,
-    onNavigate: () -> Unit,
-    onDelivered: () -> Unit,
-    onFailed: () -> Unit,
-    onDelete: () -> Unit,
-    onNotesChange: (String) -> Unit,
-    onTypeChange: (StopType) -> Unit,
-    onPackageCountChange: (Int) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StopDetailEditor(
-            stop = stop,
-            onNotesChange = onNotesChange,
-            onTypeChange = onTypeChange,
-            onPackageCountChange = onPackageCountChange,
-            onOrderPreferenceChange = { },
-            onDelete = onDelete,
-            headerActions = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = onNavigate,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Navegar")
-                    }
-                    OutlinedButton(
-                        onClick = onFailed,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                    ) {
-                        Text("Fallida")
-                    }
-                    Button(
-                        onClick = onDelivered,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Success,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                    ) {
-                        Text("Entregada")
+                activeStop == null -> {
+                    RutsCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Agrega paradas para empezar.",
+                            modifier = Modifier.padding(16.dp),
+                        )
                     }
                 }
-            },
-        )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onOptimize,
+                    modifier = Modifier.weight(1f),
+                    enabled = route.stops.size > 1,
+                ) {
+                    Text("Optimizar")
+                }
+                OutlinedButton(onClick = onAddStop, modifier = Modifier.weight(1f)) {
+                    Text("Agregar parada")
+                }
+            }
+        }
+
+        if (!viewingResolvedStop && !isStopFocused && editingStopId == null) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Text("Paradas organizadas", style = MaterialTheme.typography.titleSmall)
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(orderedStops, key = { it.id }) { stop ->
+                    StopListItem(
+                        stop = stop,
+                        isActive = stop.id == activeStop?.id,
+                        onClick = { onStopSelected(stop) },
+                        onDelete = { onDeleteStop(stop) },
+                    )
+                }
+            }
+        }
     }
 }
 

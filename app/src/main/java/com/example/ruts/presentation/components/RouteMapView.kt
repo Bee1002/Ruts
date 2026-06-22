@@ -45,6 +45,7 @@ fun RouteMapView(
     modifier: Modifier = Modifier,
     drawRoutePath: Boolean = false,
     roundTrip: Boolean = true,
+    onStopClick: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
 
@@ -167,6 +168,12 @@ fun RouteMapView(
                 map.overlays += Marker(map).apply {
                     position = OsmGeoPoint(location.latitude, location.longitude)
                     title = "Parada ${index + 1}: ${stop.address}"
+                    if (onStopClick != null) {
+                        setOnMarkerClickListener { _, _ ->
+                            onStopClick(stop.id)
+                            true
+                        }
+                    }
                     icon = createNumberedMarkerDrawable(
                         resources = context.resources,
                         number = index + 1,
