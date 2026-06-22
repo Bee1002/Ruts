@@ -1,6 +1,13 @@
 package com.example.ruts
 
 import com.example.ruts.domain.DeliveryStop
+import com.example.ruts.domain.Route
+import com.example.ruts.domain.displayLabel
+import com.example.ruts.domain.formatWeekdayLowercase
+import com.example.ruts.domain.normalizeSpokenAddress
+import com.example.ruts.domain.resolveNextRouteName
+import com.example.ruts.domain.resolveStoredRouteName
+import com.example.ruts.domain.suggestRouteNameForCreation
 import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.RouteOptimizer
 import com.example.ruts.domain.StopOrderPreference
@@ -135,5 +142,91 @@ class ExampleUnitTest {
 
         assertEquals("nearest", optimizedStops.first().id)
         assertEquals("return", optimizedStops.last().id)
+    }
+
+    @Test
+    fun resolveNextRouteNameStartsEmptyThenAddsSuffix() {
+        val dayMillis = 1_700_000_000_000L
+        val first = Route(createdAtMillis = dayMillis, name = "")
+        val secondName = resolveNextRouteName(listOf(first))
+        assertEquals("Ruta 2", secondName)
+
+        val thirdName = resolveNextRouteName(
+            listOf(first, Route(createdAtMillis = dayMillis, name = "Ruta 2")),
+        )
+        assertEquals("Ruta 3", thirdName)
+    }
+
+    @Test
+    fun resolveNextRouteNameCountsCustomNamedRouteOnSameDay() {
+        val dayMillis = 1_700_000_000_000L
+        val custom = Route(createdAtMillis = dayMillis, name = "Entrega mañana")
+        assertEquals("Ruta 2", resolveNextRouteName(listOf(custom)))
+    }
+
+    @Test
+    fun suggestRouteNameForCreationUsesWeekdayAndSuffix() {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(2026, java.util.Calendar.JUNE, 22, 12, 0, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        val dayMillis = cal.timeInMillis
+        val weekday = formatWeekdayLowercase(dayMillis)
+        val first = Route(createdAtMillis = dayMillis, name = "")
+        assertEquals(weekday, suggestRouteNameForCreation(dayMillis, listOf()))
+        assertEquals("$weekday Ruta 2", suggestRouteNameForCreation(dayMillis, listOf(first)))
+    }
+
+    @Test
+    fun resolveStoredRouteNameMapsSuggestedInputToInternalSuffix() {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(2026, java.util.Calendar.JUNE, 22, 12, 0, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        val dayMillis = cal.timeInMillis
+        val weekday = formatWeekdayLowercase(dayMillis)
+        val first = Route(createdAtMillis = dayMillis, name = "")
+        val existing = listOf(first)
+        assertEquals("Ruta 2", resolveStoredRouteName("$weekday Ruta 2", dayMillis, existing))
+        assertEquals("", resolveStoredRouteName(weekday, dayMillis, listOf()))
+        assertEquals("Entrega VIP", resolveStoredRouteName("Entrega VIP", dayMillis, existing))
+    }
+
+    @Test
+    fun normalizeSpokenAddressConvertsHouseNumbers() {
+        assertEquals(
+            "calle mayor 3 alcala de henares",
+            normalizeSpokenAddress("calle mayor tres alcala de henares"),
+        )
+        assertEquals(
+            "avenida de castilla 11 alcala de henares",
+            normalizeSpokenAddress("avenida de castilla once alcala de henares"),
+        )
+        assertEquals(
+            "calle mayor 23 alcala",
+            normalizeSpokenAddress("calle mayor veintitres alcala"),
+        )
+        assertEquals(
+            "calle mayor 35 alcala",
+            normalizeSpokenAddress("calle mayor treinta y cinco alcala"),
+        )
+    }
+
+    @Test
+    fun normalizeSpokenAddressKeepsNumberedStreetNames() {
+        assertEquals(
+            "calle dos de mayo alcala de henares",
+            normalizeSpokenAddress("calle dos de mayo alcala de henares"),
+        )
+        assertEquals(
+            "avenida tres de abril madrid",
+            normalizeSpokenAddress("avenida tres de abril madrid"),
+        )
+    }
+
+    @Test
+    fun normalizeSpokenAddressHandlesExplicitNumberMarker() {
+        assertEquals(
+            "calle mayor 3 alcala de henares",
+            normalizeSpokenAddress("calle mayor numero tres alcala de henares"),
+        )
     }
 }

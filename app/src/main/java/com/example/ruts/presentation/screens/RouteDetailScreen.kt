@@ -299,6 +299,7 @@ fun RouteDetailScreen(
                             showRouteCompleted = showRouteCompleted && allStopsResolved,
                             showRouteSummary = showRouteSummary && allStopsResolved,
                             routeCompletedAtMillis = routeCompletedAtMillis,
+                            optimizedAtMillis = currentRoute.optimizedAtMillis,
                             routeDistanceLabel = routeDistanceLabel,
                             arrivalAddress = resolvedStartAddress,
                             arrivalPostalCode = extractPostalCode(resolvedStartAddress),
@@ -367,7 +368,12 @@ fun RouteDetailScreen(
                             },
                             onOptimize = {
                                 val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
-                                persist(currentRoute.copy(stops = optimized))
+                                persist(
+                                    currentRoute.copy(
+                                        stops = optimized,
+                                        optimizedAtMillis = System.currentTimeMillis(),
+                                    ),
+                                )
                             },
                             onAddStop = { onEditRoute(currentRoute.id) },
                             onStopSelected = { selectedStop -> selectStop(selectedStop.id) },
@@ -381,10 +387,6 @@ fun RouteDetailScreen(
                             },
                             onCloseRouteCompleted = { showRouteCompleted = false },
                             onEditArrivalPoint = { onEditRoute(currentRoute.id) },
-                            onCopyStopsToNewRoute = {
-                                val newRoute = repository.duplicateRouteWithStops(currentRoute)
-                                onEditRoute(newRoute.id)
-                            },
                             onCreateNewRoute = onCreateRoute,
                         )
                     },
@@ -454,6 +456,7 @@ private fun RouteWorkSheet(
     showRouteCompleted: Boolean,
     showRouteSummary: Boolean,
     routeCompletedAtMillis: Long?,
+    optimizedAtMillis: Long?,
     routeDistanceLabel: String,
     arrivalAddress: String,
     arrivalPostalCode: String?,
@@ -477,7 +480,6 @@ private fun RouteWorkSheet(
     onAcknowledgeRouteCompleted: () -> Unit,
     onCloseRouteCompleted: () -> Unit,
     onEditArrivalPoint: () -> Unit,
-    onCopyStopsToNewRoute: () -> Unit,
     onCreateNewRoute: () -> Unit,
 ) {
     val delivered = route.stops.count { it.status == StopStatus.Delivered }
@@ -497,8 +499,8 @@ private fun RouteWorkSheet(
                 stops = orderedStops,
                 arrivalAddress = arrivalAddress,
                 finishedAtMillis = routeCompletedAtMillis,
+                optimizedAtMillis = optimizedAtMillis,
                 distanceLabel = routeDistanceLabel,
-                onCopyStopsToNewRoute = onCopyStopsToNewRoute,
                 onCreateNewRoute = onCreateNewRoute,
             )
         } else if (showRouteCompleted && routeCompletedAtMillis != null) {

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ruts.domain.Route
 import com.example.ruts.domain.displayLabel
 import com.example.ruts.domain.displaySubtitle
+import com.example.ruts.domain.isRouteSuffixName
 import com.example.ruts.domain.isSameDay
 import com.example.ruts.ui.theme.RutsUi
 
@@ -54,7 +55,7 @@ fun RoutesDrawerContent(
     var routeToDelete by remember { mutableStateOf<Route?>(null) }
     var renameValue by remember { mutableStateOf("") }
 
-    routeToRename?.let { route ->
+        routeToRename?.let { route ->
         AlertDialog(
             onDismissRequest = { routeToRename = null },
             containerColor = MaterialTheme.colorScheme.surface,
@@ -74,7 +75,8 @@ fun RoutesDrawerContent(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onRenameRoute(route.id, renameValue.trim())
+                        val trimmed = renameValue.trim()
+                        onRenameRoute(route.id, trimmed)
                         routeToRename = null
                     },
                 ) {
@@ -193,7 +195,11 @@ fun RoutesDrawerContent(
 
                     IconButton(
                         onClick = {
-                            renameValue = route.name
+                            renameValue = if (route.name.isNotBlank() && !isRouteSuffixName(route.name)) {
+                                route.name
+                            } else {
+                                ""
+                            }
                             routeToRename = route
                         },
                     ) {

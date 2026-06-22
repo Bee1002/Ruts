@@ -7,11 +7,18 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.view.ViewGroup
+import java.io.File
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ruts.domain.DeliveryStop
@@ -32,9 +39,16 @@ private val MinimalStreetTileSource = XYTileSource(
     20,
     256,
     ".png",
-    arrayOf("https://basemaps.cartocdn.com/rastertiles/voyager/"),
-    "© CARTO © OpenStreetMap contributors",
+    arrayOf(
+        "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
+        "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
+        "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
+        "https://d.basemaps.cartocdn.com/rastertiles/voyager/",
+    ),
+    "© OpenStreetMap contributors © CARTO",
 )
+
+private const val MAP_BACKGROUND_COLOR = "#F8F4F0"
 
 private const val ACTIVE_STOP_ZOOM = 16.0
 private const val OVERVIEW_ZOOM = 15.0
@@ -52,59 +66,43 @@ fun RouteMapView(
     focusPoint: GeoPoint? = null,
 ) {
     val context = LocalContext.current
+    var mapView by remember { mutableStateOf<MapView?>(null) }
 
     remember {
-        Configuration.getInstance().userAgentValue = context.packageName
+        Configuration.getInstance().apply {
+            userAgentValue = context.packageName
+            osmdroidTileCache = File(context.cacheDir, "osmdroid")
+            tileFileSystemCacheMaxBytes = 50L * 1024 * 1024
+            expirationOverrideDuration = 1000L * 60 * 60 * 24 * 30
+        }
     }
 
-    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation, drawRoutePath, focusPoint) {
+    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation, focusPoint) {
         buildString {
             append("active=$activeStopId")
             append("|focus=${focusPoint?.latitude},${focusPoint?.longitude}")
-            append("|route=$drawRoutePath")
             append("|start=${startLocation?.latitude},${startLocation?.longitude}")
             append("|current=${currentLocation?.latitude},${currentLocation?.longitude}")
             stops.forEach { stop ->
-                append("|${stop.id}:${stop.status}:${stop.location?.latitude},${stop.location?.longitude}")
+                append("|${stop.id}:${stop.location?.latitude},${stop.location?.longitude}")
             }
         }
     }
 
-    val mapView = remember {
-        MapView(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
-            setTileSource(MinimalStreetTileSource)
-            setMultiTouchControls(true)
-            setBackgroundColor(Color.parseColor("#101010"))
-            minZoomLevel = 5.0
-            maxZoomLevel = 20.0
-            controller.setZoom(15.0)
-            isHorizontalMapRepetitionEnabled = false
-            isVerticalMapRepetitionEnabled = false
-
-            val rotationOverlay = RotationGestureOverlay(this).apply {
-                isEnabled = true
-            }
-            overlays.add(rotationOverlay)
-        }
+    DisposableEffect(mapView) {
+        mapView?.onResume()
+        onDispose { mapView?.onPause() }
     }
 
-    DisposableEffect(Unit) {
-        mapView.onResume()
-        onDispose { mapView.onPause() }
-    }
-
-    LaunchedEffect(cameraSignature) {
+    LaunchedEffect(cameraSignature, mapView) {
+        val map = mapView ?: return@LaunchedEffect
         val activeStop = stops.firstOrNull { it.id == activeStopId }
         val activePoint = activeStop?.location ?: focusPoint
 
         if (activePoint != null) {
             val target = OsmGeoPoint(activePoint.latitude, activePoint.longitude)
-            mapView.controller.animateTo(target)
-            mapView.controller.setZoom(ACTIVE_STOP_ZOOM)
+            map.controller.animateTo(target)
+            map.controller.setZoom(ACTIVE_STOP_ZOOM)
             return@LaunchedEffect
         }
 
@@ -121,88 +119,141 @@ fun RouteMapView(
 
         if (points.size == 1) {
             val point = points.first()
-            mapView.controller.setCenter(OsmGeoPoint(point.latitude, point.longitude))
-            mapView.controller.setZoom(OVERVIEW_ZOOM)
+            map.controller.setCenter(OsmGeoPoint(point.latitude, point.longitude))
+            map.controller.setZoom(OVERVIEW_ZOOM)
             return@LaunchedEffect
         }
 
         val boundingBox = BoundingBox.fromGeoPoints(
             points.map { OsmGeoPoint(it.latitude, it.longitude) },
         )
-        mapView.zoomToBoundingBox(boundingBox.increaseByScale(1.15f), false)
+        map.zoomToBoundingBox(boundingBox.increaseByScale(1.15f), false)
     }
 
-    AndroidView(
-        modifier = modifier,
-        factory = { mapView },
-        update = { map ->
-            map.overlays.removeAll { overlay -> overlay is Marker || overlay is Polyline }
-
-            if (drawRoutePath && startLocation != null) {
-                val routePoints = buildList {
-                    add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
-                    stops.sortedBy { it.orderIndex }.forEach { stop ->
-                        val location = stop.location ?: return@forEach
-                        add(OsmGeoPoint(location.latitude, location.longitude))
-                    }
-                    if (roundTrip && stops.isNotEmpty()) {
-                        add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
+  Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { size ->
+                mapView?.let { map ->
+                    if (size.width > 0 && size.height > 0) {
+                        map.layout(0, 0, size.width, size.height)
+                        map.invalidate()
                     }
                 }
+            },
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                MapView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    setTileSource(MinimalStreetTileSource)
+                    setMultiTouchControls(true)
+                    isTilesScaledToDpi = true
+                    setBackgroundColor(Color.parseColor(MAP_BACKGROUND_COLOR))
+                    minZoomLevel = 5.0
+                    maxZoomLevel = 20.0
+                    controller.setZoom(15.0)
+                    isHorizontalMapRepetitionEnabled = false
+                    isVerticalMapRepetitionEnabled = false
 
-                if (routePoints.size >= 2) {
-                    map.overlays += Polyline().apply {
-                        setPoints(routePoints)
-                        outlinePaint.color = Color.parseColor("#0A84FF")
-                        outlinePaint.strokeWidth = 14f
-                        outlinePaint.isAntiAlias = true
+                    val rotationOverlay = RotationGestureOverlay(this).apply {
+                        isEnabled = true
                     }
-                }
-            }
+                    overlays.add(rotationOverlay)
 
-            currentLocation?.let { location ->
-                map.overlays += Marker(map).apply {
-                    position = OsmGeoPoint(location.latitude, location.longitude)
-                    title = "Tu ubicación"
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                }
-            }
-
-            startLocation?.let { location ->
-                map.overlays += Marker(map).apply {
-                    position = OsmGeoPoint(location.latitude, location.longitude)
-                    title = "Inicio de ruta"
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                }
-            }
-
-            stops.sortedBy { it.orderIndex }.forEachIndexed { index, stop ->
-                val location = stop.location ?: return@forEachIndexed
-                val isActive = stop.id == activeStopId
-
-                map.overlays += Marker(map).apply {
-                    position = OsmGeoPoint(location.latitude, location.longitude)
-                    title = "Parada ${index + 1}: ${stop.address}"
-                    if (onStopClick != null) {
-                        setOnMarkerClickListener { _, _ ->
-                            onStopClick(stop.id)
-                            true
+                    addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                        val width = right - left
+                        val height = bottom - top
+                        val oldWidth = oldRight - oldLeft
+                        val oldHeight = oldBottom - oldTop
+                        if (width > 0 && height > 0 && (width != oldWidth || height != oldHeight)) {
+                            invalidate()
                         }
                     }
-                    icon = createNumberedMarkerDrawable(
-                        resources = context.resources,
-                        number = index + 1,
-                        isActive = isActive,
-                        status = stop.status,
-                        useBlueHighlight = drawRoutePath,
-                    )
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                }
-            }
+                }.also { created -> mapView = created }
+            },
+            update = { map ->
+                map.overlays.removeAll { overlay -> overlay is Marker || overlay is Polyline }
 
-            map.invalidate()
-        },
-    )
+                if (drawRoutePath && startLocation != null) {
+                    val routePoints = buildList {
+                        add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
+                        stops.sortedBy { it.orderIndex }.forEach { stop ->
+                            val location = stop.location ?: return@forEach
+                            add(OsmGeoPoint(location.latitude, location.longitude))
+                        }
+                        if (roundTrip && stops.isNotEmpty()) {
+                            add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
+                        }
+                    }
+
+                    if (routePoints.size >= 2) {
+                        map.overlays += Polyline().apply {
+                            setPoints(routePoints)
+                            outlinePaint.color = Color.parseColor("#0A84FF")
+                            outlinePaint.strokeWidth = 14f
+                            outlinePaint.isAntiAlias = true
+                        }
+                    }
+                }
+
+                currentLocation?.let { location ->
+                    map.overlays += Marker(map).apply {
+                        position = OsmGeoPoint(location.latitude, location.longitude)
+                        title = "Tu ubicación"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    }
+                }
+
+                startLocation?.let { location ->
+                    map.overlays += Marker(map).apply {
+                        position = OsmGeoPoint(location.latitude, location.longitude)
+                        title = "Inicio de ruta"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    }
+                }
+
+                stops.sortedBy { it.orderIndex }.forEachIndexed { index, stop ->
+                    val location = stop.location ?: return@forEachIndexed
+                    val isActive = stop.id == activeStopId
+
+                    map.overlays += Marker(map).apply {
+                        position = OsmGeoPoint(location.latitude, location.longitude)
+                        title = "Parada ${index + 1}: ${stop.address}"
+                        if (onStopClick != null) {
+                            setOnMarkerClickListener { _, _ ->
+                                onStopClick(stop.id)
+                                true
+                            }
+                        }
+                        icon = createNumberedMarkerDrawable(
+                            resources = context.resources,
+                            number = index + 1,
+                            isActive = isActive,
+                            status = stop.status,
+                            useBlueHighlight = drawRoutePath,
+                        )
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    }
+                }
+
+                map.post {
+                    map.requestLayout()
+                    map.invalidate()
+                }
+            },
+            onRelease = { map ->
+                map.onPause()
+                if (mapView == map) {
+                    mapView = null
+                }
+            },
+        )
+    }
 }
 
 private fun createNumberedMarkerDrawable(

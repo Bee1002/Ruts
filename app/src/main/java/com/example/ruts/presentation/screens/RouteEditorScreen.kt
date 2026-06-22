@@ -13,7 +13,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.ui.platform.LocalConfiguration
+import com.example.ruts.ui.theme.AccentBlue
+import com.example.ruts.ui.theme.White
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,8 +31,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,9 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -56,7 +59,7 @@ import com.example.ruts.domain.Route
 import com.example.ruts.domain.RouteEstimator
 import com.example.ruts.domain.RouteOptimizer
 import com.example.ruts.domain.formatDuration
-import com.example.ruts.domain.displayLabel
+import com.example.ruts.domain.normalizeSpokenAddress
 import com.example.ruts.geocoding.AddressResult
 import com.example.ruts.geocoding.GeocodingHelper
 import com.example.ruts.location.LocationHelper
@@ -70,7 +73,6 @@ import com.example.ruts.presentation.components.RouteStopsOverview
 import androidx.compose.ui.unit.dp
 import com.example.ruts.ui.theme.RutsUi
 import com.example.ruts.ui.theme.Success
-import com.example.ruts.ui.theme.SurfaceCard
 import com.example.ruts.ui.theme.TextSecondary
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
@@ -94,7 +96,8 @@ fun RouteEditorScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val collapsedPeek = 320.dp
+    val configuration = LocalConfiguration.current
+    val collapsedPeek = (configuration.screenHeightDp * 0.58f).dp
     val sheetState = rememberBottomSheetScaffoldState()
     val geocodingHelper = remember { GeocodingHelper(context) }
     val locationHelper = remember { LocationHelper(context) }
@@ -102,7 +105,7 @@ fun RouteEditorScreen(
     var route by remember { mutableStateOf<Route?>(null) }
     var currentLocation by remember { mutableStateOf<GeoPoint?>(null) }
     var startAddress by remember { mutableStateOf<String?>(null) }
-    var searchExpanded by remember { mutableStateOf(true) }
+    var searchExpanded by remember { mutableStateOf(false) }
     var selectedStopId by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<AddressResult>>(emptyList()) }
@@ -137,7 +140,7 @@ fun RouteEditorScreen(
 
             if (!spokenText.isNullOrBlank()) {
                 searchExpanded = true
-                searchQuery = spokenText
+                searchQuery = normalizeSpokenAddress(spokenText)
             }
         }
     }
@@ -153,6 +156,16 @@ fun RouteEditorScreen(
                 Manifest.permission.ACCESS_COARSE_LOCATION,
             ),
         )
+    }
+
+    LaunchedEffect(route?.id, currentLocation) {
+        val currentRoute = route ?: return@LaunchedEffect
+        val location = currentLocation ?: return@LaunchedEffect
+        if (currentRoute.startLocation == null) {
+            val updated = currentRoute.copy(startLocation = location)
+            route = updated
+            repository.saveRoute(updated)
+        }
     }
 
     LaunchedEffect(route?.startLocation, currentLocation) {
@@ -277,7 +290,10 @@ fun RouteEditorScreen(
             }
             delay(2500)
             val optimizedStops = optimizedDeferred.await()
-            val updatedRoute = currentRoute.copy(stops = optimizedStops)
+            val updatedRoute = currentRoute.copy(
+                stops = optimizedStops,
+                optimizedAtMillis = System.currentTimeMillis(),
+            )
             route = updatedRoute
             repository.saveRoute(updatedRoute)
             optimizationState = OptimizationUiState.Optimized
@@ -322,10 +338,16 @@ fun RouteEditorScreen(
         else -> null
     }
 
-    LaunchedEffect(currentRoute?.stops?.size) {
-        if (selectedStopId == null && currentRoute?.stops?.isNotEmpty() == true && !searchExpanded) {
+    LaunchedEffect(currentRoute?.id) {
+        if (currentRoute?.stops?.isEmpty() == true) {
             searchExpanded = false
+            sheetState.bottomSheetState.partialExpand()
         }
+    }
+
+    fun openAddStopSearch() {
+        searchExpanded = true
+        scope.launch { sheetState.bottomSheetState.expand() }
     }
 
     if (currentRoute == null) {
@@ -339,75 +361,9 @@ fun RouteEditorScreen(
         return
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            when {
-                optimizationState == OptimizationUiState.Optimizing -> Unit
-
-                isOptimizedView -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.background)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(
-                            text = formatDuration(optimizedDurationMinutes),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Success,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedButton(
-                            onClick = ::adjustOptimizedRoute,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("Ajustar")
-                        }
-                        Button(
-                            onClick = ::confirmOptimizedRoute,
-                            modifier = Modifier.weight(1f),
-                            colors = RutsUi.primaryButtonColors,
-                        ) {
-                            Text("Confirmar")
-                        }
-                    }
-                }
-
-                else -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.background)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                    ) {
-                        Button(
-                            onClick = {
-                                searchExpanded = false
-                                onFinished()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = RutsUi.primaryButtonColors,
-                        ) {
-                            Text(
-                                if (currentRoute.stops.isEmpty()) {
-                                    "Continuar sin paradas"
-                                } else {
-                                    "Continuar con la ruta"
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        },
-    ) { scaffoldPadding ->
-        Box(modifier = Modifier.padding(scaffoldPadding)) {
-            BottomSheetScaffold(
-            modifier = Modifier.padding(scaffoldPadding),
+    Box(modifier = Modifier.fillMaxSize()) {
+        BottomSheetScaffold(
+            modifier = Modifier.fillMaxSize(),
             scaffoldState = sheetState,
             sheetPeekHeight = collapsedPeek,
             containerColor = MaterialTheme.colorScheme.background,
@@ -429,35 +385,6 @@ fun RouteEditorScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                 }
             },
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Text(
-                            currentRoute.displayLabel(),
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                    },
-                    navigationIcon = {
-                        TextButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(20.dp),
-                            )
-                            Text(
-                                "Rutas",
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        titleContentColor = MaterialTheme.colorScheme.onBackground,
-                        navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
-                    ),
-                )
-            },
             sheetContent = {
                 val scrollState = rememberScrollState()
 
@@ -468,11 +395,12 @@ fun RouteEditorScreen(
                 ) {
                     if (!searchExpanded && (isOptimizedView || currentRoute.stops.isEmpty() || isSheetExpanded || selectedStop != null)) {
                         CompactAddressSearchBar(
-                            onOpenExpanded = {
-                                searchExpanded = true
+                            placeholder = "Pulsa para añadir",
+                            onOpenExpanded = ::openAddStopSearch,
+                            onVoiceClick = { launchVoiceSearch() },
+                            onMenuClick = {
                                 scope.launch { sheetState.bottomSheetState.expand() }
                             },
-                            onVoiceClick = { launchVoiceSearch() },
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                     }
@@ -540,28 +468,7 @@ fun RouteEditorScreen(
                             }
 
                             currentRoute.stops.isEmpty() -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(SurfaceCard)
-                                        .padding(24.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Text(
-                                        text = "Añade nuevas paradas",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onBackground,
-                                        textAlign = TextAlign.Center,
-                                    )
-                                    Text(
-                                        text = "Pulsa la barra de búsqueda para encontrar una dirección.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = TextSecondary,
-                                        textAlign = TextAlign.Center,
-                                    )
-                                }
+                                RouteEditorEmptyState()
                             }
 
                             else -> {
@@ -569,10 +476,7 @@ fun RouteEditorScreen(
                                     route = currentRoute,
                                     startAddress = startAddress,
                                     isSheetExpanded = isSheetExpanded,
-                                    onSearchClick = {
-                                        searchExpanded = true
-                                        scope.launch { sheetState.bottomSheetState.expand() }
-                                    },
+                                    onSearchClick = ::openAddStopSearch,
                                     onMenuClick = {
                                         scope.launch { sheetState.bottomSheetState.expand() }
                                     },
@@ -584,27 +488,139 @@ fun RouteEditorScreen(
                                 )
                             }
                         }
+                    }
 
-                        Spacer(modifier = Modifier.height(32.dp))
+                    if (!searchExpanded && !isOptimizedView && selectedStop == null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        if (currentRoute.stops.isEmpty()) {
+                            Button(
+                                onClick = ::openAddStopSearch,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AccentBlue,
+                                    contentColor = White,
+                                ),
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Text(
+                                    "+ Añadir paradas",
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    searchExpanded = false
+                                    onFinished()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = RutsUi.primaryButtonColors,
+                            ) {
+                                Text("Continuar con la ruta")
+                            }
+                        }
                     }
                 }
             },
-        ) { innerPadding ->
-            RouteMapView(
-                currentLocation = currentLocation,
-                startLocation = currentRoute.startLocation ?: currentLocation,
-                stops = currentRoute.stops,
-                activeStopId = highlightedStopId,
-                drawRoutePath = isOptimizedView,
-                modifier = Modifier
-                    .padding(innerPadding)
-                    .fillMaxSize(),
-            )
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                RouteMapView(
+                    currentLocation = currentLocation,
+                    startLocation = currentRoute.startLocation ?: currentLocation,
+                    stops = currentRoute.stops,
+                    activeStopId = highlightedStopId,
+                    drawRoutePath = isOptimizedView,
+                    modifier = Modifier.fillMaxSize(),
+                )
+
+                SmallFloatingActionButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 16.dp, top = 16.dp),
+                    containerColor = White,
+                    contentColor = MaterialTheme.colorScheme.background,
+                ) {
+                    Icon(Icons.Default.Menu, contentDescription = "Rutas")
+                }
+            }
         }
 
-            RouteOptimizationOverlay(
-                visible = optimizationState == OptimizationUiState.Optimizing,
+        if (isOptimizedView) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = formatDuration(optimizedDurationMinutes),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Success,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(
+                    onClick = ::adjustOptimizedRoute,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Ajustar")
+                }
+                Button(
+                    onClick = ::confirmOptimizedRoute,
+                    modifier = Modifier.weight(1f),
+                    colors = RutsUi.primaryButtonColors,
+                ) {
+                    Text("Confirmar")
+                }
+            }
+        }
+
+        RouteOptimizationOverlay(
+            visible = optimizationState == OptimizationUiState.Optimizing,
+        )
+    }
+}
+
+@Composable
+private fun RouteEditorEmptyState() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .border(
+                    width = 2.dp,
+                    color = TextSecondary.copy(alpha = 0.35f),
+                    shape = RoundedCornerShape(16.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.size(32.dp),
             )
         }
+        Text(
+            text = "Añade las primeras paradas para empezar a crear la ruta",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
     }
 }

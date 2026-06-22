@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,7 +37,8 @@ fun CompactAddressSearchBar(
     onOpenExpanded: () -> Unit,
     onVoiceClick: () -> Unit,
     modifier: Modifier = Modifier,
-    placeholder: String = "Escribe para añadir más",
+    placeholder: String = "Pulsa para añadir",
+    onMenuClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -57,6 +59,15 @@ fun CompactAddressSearchBar(
         )
         IconButton(onClick = onVoiceClick) {
             Icon(Icons.Default.Mic, contentDescription = "Buscar por voz", tint = AccentBlue)
+        }
+        if (onMenuClick != null) {
+            IconButton(onClick = onMenuClick) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "Más opciones",
+                    tint = AccentBlue,
+                )
+            }
         }
     }
 }

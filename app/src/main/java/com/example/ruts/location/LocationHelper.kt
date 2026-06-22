@@ -10,6 +10,7 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 class LocationHelper(context: Context) {
@@ -17,7 +18,47 @@ class LocationHelper(context: Context) {
 
     @SuppressLint("MissingPermission")
     suspend fun getCurrentLocation(): GeoPoint? {
-        val lastKnown = suspendCancellableCoroutine { continuation ->
+        return getFreshLocation() ?: getLastKnownLocation()
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun getFreshLocation(): GeoPoint? {
+        return withTimeoutOrNull(8_000L) {
+            suspendCancellableCoroutine { continuation ->
+                val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1_000L)
+                    .setMaxUpdates(1)
+                    .build()
+
+                val callback = object : LocationCallback() {
+                    override fun onLocationResult(result: LocationResult) {
+                        fusedClient.removeLocationUpdates(this)
+                        val location = result.lastLocation
+                        if (continuation.isActive) {
+                            continuation.resume(
+                                location?.let { GeoPoint(it.latitude, it.longitude) },
+                            )
+                        }
+                    }
+                }
+
+                fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
+                    .addOnFailureListener {
+                        fusedClient.removeLocationUpdates(callback)
+                        if (continuation.isActive) {
+                            continuation.resume(null)
+                        }
+                    }
+
+                continuation.invokeOnCancellation {
+                    fusedClient.removeLocationUpdates(callback)
+                }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun getLastKnownLocation(): GeoPoint? {
+        return suspendCancellableCoroutine { continuation ->
             fusedClient.lastLocation
                 .addOnSuccessListener { location ->
                     if (location != null) {
@@ -27,36 +68,6 @@ class LocationHelper(context: Context) {
                     }
                 }
                 .addOnFailureListener { continuation.resume(null) }
-        }
-
-        if (lastKnown != null) {
-            return lastKnown
-        }
-
-        return suspendCancellableCoroutine { continuation ->
-            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-                .setMaxUpdates(1)
-                .build()
-
-            val callback = object : LocationCallback() {
-                override fun onLocationResult(result: LocationResult) {
-                    fusedClient.removeLocationUpdates(this)
-                    val location = result.lastLocation
-                    continuation.resume(
-                        location?.let { GeoPoint(it.latitude, it.longitude) },
-                    )
-                }
-            }
-
-            fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
-                .addOnFailureListener {
-                    fusedClient.removeLocationUpdates(callback)
-                    continuation.resume(null)
-                }
-
-            continuation.invokeOnCancellation {
-                fusedClient.removeLocationUpdates(callback)
-            }
         }
     }
 }

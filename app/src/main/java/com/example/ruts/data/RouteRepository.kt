@@ -6,6 +6,8 @@ import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.Route
 import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
+import com.example.ruts.domain.resolveNextRouteName
+import com.example.ruts.domain.routesOnSameDay
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -60,8 +62,14 @@ class RouteRepository(context: Context) {
         }
     }
 
-    fun createRoute(createdAtMillis: Long = System.currentTimeMillis()): Route {
-        val route = Route(createdAtMillis = createdAtMillis)
+    fun createRoute(
+        createdAtMillis: Long = System.currentTimeMillis(),
+        name: String = resolveNextRouteName(routesOnSameDay(getAllRoutes(), createdAtMillis)),
+    ): Route {
+        val route = Route(
+            createdAtMillis = createdAtMillis,
+            name = name,
+        )
         saveRoute(route)
         return route
     }
@@ -100,6 +108,7 @@ class RouteRepository(context: Context) {
         .put("id", id)
         .put("name", name)
         .put("createdAtMillis", createdAtMillis)
+        .put("optimizedAtMillis", optimizedAtMillis)
         .put("startLatitude", startLocation?.latitude)
         .put("startLongitude", startLocation?.longitude)
         .put("stops", JSONArray().also { stopsArray ->
@@ -133,6 +142,11 @@ class RouteRepository(context: Context) {
             id = getString("id"),
             name = optString("name"),
             createdAtMillis = getLong("createdAtMillis"),
+            optimizedAtMillis = if (has("optimizedAtMillis") && !isNull("optimizedAtMillis")) {
+                getLong("optimizedAtMillis")
+            } else {
+                null
+            },
             startLocation = if (startLatitude != null && startLongitude != null) {
                 GeoPoint(startLatitude, startLongitude)
             } else {

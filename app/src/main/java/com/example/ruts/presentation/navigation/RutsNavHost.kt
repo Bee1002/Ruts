@@ -1,7 +1,9 @@
 package com.example.ruts.presentation.navigation
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -24,7 +26,7 @@ object Routes {
 }
 
 @Composable
-fun RutsNavHost() {
+fun RutsNavHost(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val repository = remember { RouteRepository(context) }
     val navController = rememberNavController()
@@ -34,6 +36,7 @@ fun RutsNavHost() {
     NavHost(
         navController = navController,
         startDestination = startDestination,
+        modifier = modifier.fillMaxSize(),
     ) {
         composable(Routes.Home) {
             RouteDetailScreen(
@@ -88,6 +91,7 @@ fun RutsNavHost() {
 
         composable(Routes.CreateRoute) {
             CreateRouteScreen(
+                routes = repository.getAllRoutes(),
                 onBack = {
                     if (navController.previousBackStackEntry != null) {
                         navController.popBackStack()
@@ -104,8 +108,11 @@ fun RutsNavHost() {
                         }
                     }
                 },
-                onConfirm = { createdAtMillis ->
-                    val route = repository.createRoute(createdAtMillis)
+                onConfirm = { createdAtMillis, routeName ->
+                    val route = repository.createRoute(
+                        createdAtMillis = createdAtMillis,
+                        name = routeName,
+                    )
                     navController.navigate(Routes.routeEditor(route.id)) {
                         popUpTo(Routes.CreateRoute) { inclusive = true }
                     }
