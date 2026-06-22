@@ -1,0 +1,564 @@
+package com.example.ruts.presentation.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.BottomSheetScaffold
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.example.ruts.data.RouteRepository
+import com.example.ruts.domain.DeliveryStop
+import com.example.ruts.domain.GeoPoint
+import com.example.ruts.domain.Route
+import com.example.ruts.domain.RouteOptimizer
+import com.example.ruts.domain.StopStatus
+import com.example.ruts.domain.StopType
+import com.example.ruts.domain.displayLabel
+import com.example.ruts.maps.MapsNavigator
+import com.example.ruts.presentation.components.RouteMapView
+import com.example.ruts.presentation.components.RoutesDrawerContent
+import com.example.ruts.presentation.components.StopDetailEditor
+import com.example.ruts.ui.theme.Error
+import com.example.ruts.ui.theme.Success
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RouteDetailScreen(
+    routeId: String,
+    repository: RouteRepository,
+    onCreateRoute: () -> Unit,
+    onEditRoute: (String) -> Unit,
+    onRouteSelected: (String) -> Unit,
+    onRouteDeleted: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val sheetState = rememberBottomSheetScaffoldState()
+
+    var route by remember { mutableStateOf<Route?>(null) }
+    var allRoutes by remember { mutableStateOf(emptyList<Route>()) }
+
+    fun reload(routeToSelect: String = routeId) {
+        allRoutes = repository.getAllRoutes()
+        route = if (routeToSelect.isNotBlank()) {
+            repository.getRoute(routeToSelect)?.also { repository.setLastRouteId(routeToSelect) }
+        } else {
+            null
+        }
+    }
+
+    LaunchedEffect(routeId) {
+        reload()
+    }
+
+    fun persist(updatedRoute: Route) {
+        repository.saveRoute(updatedRoute)
+        route = updatedRoute
+        allRoutes = repository.getAllRoutes()
+    }
+
+    fun updateStops(transform: (List<DeliveryStop>) -> List<DeliveryStop>) {
+        val currentRoute = route ?: return
+        persist(currentRoute.copy(stops = transform(currentRoute.stops).reindexStops()))
+    }
+
+    fun handleDeleteRoute(deletedRouteId: String) {
+        val wasCurrentRoute = deletedRouteId == route?.id
+        repository.deleteRoute(deletedRouteId)
+        allRoutes = repository.getAllRoutes()
+
+        if (wasCurrentRoute) {
+            val nextRouteId = allRoutes.firstOrNull()?.id
+            if (nextRouteId != null) {
+                onRouteSelected(nextRouteId)
+            } else {
+                onRouteDeleted()
+            }
+        } else {
+            reload()
+        }
+    }
+
+    val currentRoute = route
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = false,
+        scrimColor = Color.Black.copy(alpha = 0.75f),
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = MaterialTheme.colorScheme.background,
+                drawerContentColor = MaterialTheme.colorScheme.onBackground,
+            ) {
+                RoutesDrawerContent(
+                    routes = allRoutes,
+                    selectedRouteId = currentRoute?.id,
+                    onRouteSelected = { selectedId ->
+                        scope.launch {
+                            drawerState.close()
+                            onRouteSelected(selectedId)
+                        }
+                    },
+                    onCreateRoute = {
+                        scope.launch {
+                            drawerState.close()
+                            onCreateRoute()
+                        }
+                    },
+                    onRenameRoute = { id, newName ->
+                        repository.getRoute(id)?.let { existing ->
+                            repository.saveRoute(existing.copy(name = newName))
+                            reload(route?.id ?: routeId)
+                        }
+                    },
+                    onDeleteRoute = { id ->
+                        scope.launch {
+                            drawerState.close()
+                            handleDeleteRoute(id)
+                        }
+                    },
+                    onClose = {
+                        scope.launch { drawerState.close() }
+                    },
+                )
+            }
+        },
+    ) {
+        when {
+            currentRoute == null && allRoutes.isEmpty() -> {
+                EmptyRoutesState(onCreateRoute = onCreateRoute)
+            }
+
+            currentRoute == null -> {
+                MissingRouteState()
+            }
+
+            else -> {
+                val orderedStops = currentRoute.stops.sortedBy { it.orderIndex }
+                val activeStop = orderedStops.firstOrNull { it.status == StopStatus.Pending }
+                    ?: orderedStops.firstOrNull()
+                val startPoint = currentRoute.startLocation ?: GeoPoint(40.4168, -3.7038)
+
+                BottomSheetScaffold(
+                    scaffoldState = sheetState,
+                    sheetPeekHeight = 280.dp,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    sheetContainerColor = MaterialTheme.colorScheme.surface,
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(currentRoute.displayLabel()) },
+                            navigationIcon = {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(Icons.Default.Menu, contentDescription = "Rutas")
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = { onEditRoute(currentRoute.id) }) {
+                                    Icon(Icons.Default.Add, contentDescription = "Agregar paradas")
+                                }
+                            },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.background,
+                                titleContentColor = MaterialTheme.colorScheme.onBackground,
+                                navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                                actionIconContentColor = MaterialTheme.colorScheme.onBackground,
+                            ),
+                        )
+                    },
+                    sheetContent = {
+                        RouteWorkSheet(
+                            route = currentRoute,
+                            activeStop = activeStop,
+                            onNavigate = {
+                                if (activeStop != null) {
+                                    MapsNavigator.openNavigation(context, activeStop)
+                                }
+                            },
+                            onDelivered = {
+                                activeStop?.let { stop ->
+                                    updateStops { stops ->
+                                        stops.updateStop(stop.id) {
+                                            it.copy(status = StopStatus.Delivered, failureReason = "")
+                                        }
+                                    }
+                                }
+                            },
+                            onFailed = {
+                                activeStop?.let { stop ->
+                                    updateStops { stops ->
+                                        stops.updateStop(stop.id) {
+                                            it.copy(
+                                                status = StopStatus.Failed,
+                                                failureReason = "Incidencia",
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onDeleteStop = { stop ->
+                                updateStops { stops -> stops.filterNot { it.id == stop.id } }
+                            },
+                            onUpdateStop = { stopId, transform ->
+                                updateStops { stops ->
+                                    stops.map { stop ->
+                                        if (stop.id == stopId) transform(stop) else stop
+                                    }
+                                }
+                            },
+                            onOptimize = {
+                                val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
+                                persist(currentRoute.copy(stops = optimized))
+                            },
+                            onAddStop = { onEditRoute(currentRoute.id) },
+                            onStopSelected = { selectedStop ->
+                                updateStops { stops ->
+                                    val selected = stops.first { it.id == selectedStop.id }
+                                    val remaining = stops.filterNot { it.id == selectedStop.id }
+                                    listOf(selected.copy(orderIndex = -1, status = StopStatus.Pending)) + remaining
+                                }
+                            },
+                        )
+                    },
+                ) { innerPadding ->
+                    RouteMapView(
+                        currentLocation = null,
+                        startLocation = currentRoute.startLocation,
+                        stops = orderedStops,
+                        activeStopId = activeStop?.id,
+                        modifier = Modifier
+                            .padding(innerPadding)
+                            .fillMaxSize(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyRoutesState(onCreateRoute: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Aún no tienes rutas", style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "Crea tu primera ruta para empezar a organizar paradas.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onCreateRoute) {
+            Text("Agregar nueva ruta")
+        }
+    }
+}
+
+@Composable
+private fun MissingRouteState() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Ruta no encontrada", style = MaterialTheme.typography.headlineSmall)
+    }
+}
+
+@Composable
+private fun RouteWorkSheet(
+    route: Route,
+    activeStop: DeliveryStop?,
+    onNavigate: () -> Unit,
+    onDelivered: () -> Unit,
+    onFailed: () -> Unit,
+    onDeleteStop: (DeliveryStop) -> Unit,
+    onUpdateStop: (String, (DeliveryStop) -> DeliveryStop) -> Unit,
+    onOptimize: () -> Unit,
+    onAddStop: () -> Unit,
+    onStopSelected: (DeliveryStop) -> Unit,
+) {
+    val delivered = route.stops.count { it.status == StopStatus.Delivered }
+    val failed = route.stops.count { it.status == StopStatus.Failed }
+    val pending = route.stops.count { it.status == StopStatus.Pending }
+    val orderedStops = route.stops.sortedBy { it.orderIndex }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Ruta de trabajo", style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = "Pendientes: $pending · Entregadas: $delivered · Fallidas: $failed",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        if (activeStop != null) {
+            ActiveStopCard(
+                stop = activeStop,
+                onNavigate = onNavigate,
+                onDelivered = onDelivered,
+                onFailed = onFailed,
+                onDelete = { onDeleteStop(activeStop) },
+                onNotesChange = { notes ->
+                    onUpdateStop(activeStop.id) { it.copy(notes = notes) }
+                },
+                onTypeChange = { type ->
+                    onUpdateStop(activeStop.id) { it.copy(stopType = type) }
+                },
+                onPackageCountChange = { count ->
+                    onUpdateStop(activeStop.id) { it.copy(packageCount = count.coerceAtLeast(1)) }
+                },
+            )
+        } else {
+            RutsCard(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Agrega paradas para empezar.",
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onOptimize,
+                modifier = Modifier.weight(1f),
+                enabled = route.stops.size > 1,
+            ) {
+                Text("Optimizar")
+            }
+            OutlinedButton(onClick = onAddStop, modifier = Modifier.weight(1f)) {
+                Text("Agregar parada")
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Text("Paradas organizadas", style = MaterialTheme.typography.titleSmall)
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 320.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(orderedStops, key = { it.id }) { stop ->
+                StopListItem(
+                    stop = stop,
+                    isActive = stop.id == activeStop?.id,
+                    onClick = { onStopSelected(stop) },
+                    onDelete = { onDeleteStop(stop) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveStopCard(
+    stop: DeliveryStop,
+    onNavigate: () -> Unit,
+    onDelivered: () -> Unit,
+    onFailed: () -> Unit,
+    onDelete: () -> Unit,
+    onNotesChange: (String) -> Unit,
+    onTypeChange: (StopType) -> Unit,
+    onPackageCountChange: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        StopDetailEditor(
+            stop = stop,
+            onNotesChange = onNotesChange,
+            onTypeChange = onTypeChange,
+            onPackageCountChange = onPackageCountChange,
+            onOrderPreferenceChange = { },
+            onDelete = onDelete,
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onDelivered,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Success,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Text("Entregado")
+            }
+            Button(
+                onClick = onFailed,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
+                Text("Fallido")
+            }
+        }
+
+        OutlinedButton(onClick = onNavigate, modifier = Modifier.fillMaxWidth()) {
+            Text("Navegar en Google Maps")
+        }
+    }
+}
+
+@Composable
+private fun StopListItem(
+    stop: DeliveryStop,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    RutsCard(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "#${stop.orderIndex + 1}",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (isActive) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(stop.address, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = buildString {
+                        append(stop.status.label())
+                        append(" · ")
+                        append(if (stop.stopType == StopType.Delivery) "Entrega" else "Recogida")
+                        append(" · ")
+                        append("${stop.packageCount} paq.")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (stop.failureReason.isNotBlank()) {
+                    Text(
+                        text = stop.failureReason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Eliminar parada",
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RutsCard(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    if (onClick != null) {
+        Card(
+            modifier = modifier,
+            onClick = onClick,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+        ) {
+            content()
+        }
+    } else {
+        Card(
+            modifier = modifier,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+        ) {
+            content()
+        }
+    }
+}
+
+private fun StopStatus.label(): String {
+    return when (this) {
+        StopStatus.Pending -> "Pendiente"
+        StopStatus.Delivered -> "Entregada"
+        StopStatus.Failed -> "Fallida"
+    }
+}
+
+private fun List<DeliveryStop>.updateStop(
+    stopId: String,
+    transform: (DeliveryStop) -> DeliveryStop,
+): List<DeliveryStop> = map { stop ->
+    if (stop.id == stopId) transform(stop) else stop
+}
+
+private fun List<DeliveryStop>.reindexStops(): List<DeliveryStop> {
+    return sortedBy { it.orderIndex }.mapIndexed { index, stop ->
+        stop.copy(orderIndex = index)
+    }
+}
