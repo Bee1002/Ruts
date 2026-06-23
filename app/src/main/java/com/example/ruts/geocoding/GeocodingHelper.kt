@@ -7,6 +7,7 @@ import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.RouteOptimizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.text.Normalizer
 import java.util.Locale
 
@@ -49,26 +50,26 @@ class GeocodingHelper(context: Context) {
     suspend fun reverseGeocode(location: GeoPoint): String? = withContext(Dispatchers.IO) {
         if (!Geocoder.isPresent()) return@withContext null
 
-        @Suppress("DEPRECATION")
-        val results = geocoder.getFromLocation(location.latitude, location.longitude, 1)
-            ?: return@withContext null
-
-        results.firstOrNull()?.getAddressLine(0)
+        runGeocoder {
+            @Suppress("DEPRECATION")
+            geocoder.getFromLocation(location.latitude, location.longitude, 1)
+        }?.firstOrNull()?.getAddressLine(0)
     }
 
     suspend fun reverseGeocodeResult(location: GeoPoint): AddressResult? = withContext(Dispatchers.IO) {
         if (!Geocoder.isPresent()) return@withContext null
 
-        @Suppress("DEPRECATION")
-        val results = geocoder.getFromLocation(location.latitude, location.longitude, 1)
-            ?: return@withContext null
-
-        results.firstOrNull()?.toAddressResult()
+        runGeocoder {
+            @Suppress("DEPRECATION")
+            geocoder.getFromLocation(location.latitude, location.longitude, 1)
+        }?.firstOrNull()?.toAddressResult()
     }
 
     private fun geocode(query: String, bias: SearchBias?): List<AddressResult> {
-        @Suppress("DEPRECATION")
-        val results = geocoder.getFromLocationName(query, 8) ?: emptyList()
+        val results = runGeocoder {
+            @Suppress("DEPRECATION")
+            geocoder.getFromLocationName(query, 8)
+        }.orEmpty()
 
         return results
             .mapNotNull { it.toAddressResult() }
@@ -80,6 +81,16 @@ class GeocodingHelper(context: Context) {
                 val anchor = bias?.anchor
                 if (anchor != null) RouteOptimizer.distanceKm(anchor, result.location) else 0.0
             })
+    }
+
+    private inline fun <T> runGeocoder(block: () -> T?): T? {
+        return try {
+            block()
+        } catch (_: IOException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
     }
 
     private fun Address.toAddressResult(): AddressResult? {

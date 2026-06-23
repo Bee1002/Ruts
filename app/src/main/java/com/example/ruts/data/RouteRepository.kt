@@ -1,9 +1,11 @@
 package com.example.ruts.data
 
 import android.content.Context
+import com.example.ruts.domain.DEFAULT_SERVICE_MINUTES
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.Route
+import com.example.ruts.domain.StopOrderPreference
 import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
 import com.example.ruts.domain.resolveNextRouteName
@@ -125,7 +127,9 @@ class RouteRepository(context: Context) {
         .put("status", status.name)
         .put("stopType", stopType.name)
         .put("packageCount", packageCount)
+        .put("serviceMinutes", serviceMinutes)
         .put("notes", notes)
+        .put("orderPreference", orderPreference.name)
         .put("failureReason", failureReason)
 
     private fun JSONObject.toRoute(): Route {
@@ -181,7 +185,18 @@ class RouteRepository(context: Context) {
             } else {
                 1
             },
+            serviceMinutes = if (has("serviceMinutes") && !isNull("serviceMinutes")) {
+                getInt("serviceMinutes").coerceIn(1, 60)
+            } else {
+                DEFAULT_SERVICE_MINUTES
+            },
             notes = optString("notes"),
+            orderPreference = if (has("orderPreference") && !isNull("orderPreference")) {
+                runCatching { StopOrderPreference.valueOf(getString("orderPreference")) }
+                    .getOrDefault(StopOrderPreference.Automatic)
+            } else {
+                StopOrderPreference.Automatic
+            },
             failureReason = optString("failureReason"),
         )
     }

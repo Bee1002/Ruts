@@ -145,6 +145,61 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun estimatorUsesConfiguredServiceMinutes() {
+        val stops = listOf(
+            DeliveryStop(
+                id = "quick",
+                customerName = "Rapida",
+                address = "Rapida",
+                location = GeoPoint(0.0, 0.0),
+                orderIndex = 0,
+                serviceMinutes = 2,
+            ),
+            DeliveryStop(
+                id = "slow",
+                customerName = "Lenta",
+                address = "Lenta",
+                location = GeoPoint(0.0, 0.0),
+                orderIndex = 1,
+                serviceMinutes = 10,
+            ),
+        )
+
+        assertEquals(12, com.example.ruts.domain.RouteEstimator.estimatedDurationMinutes(stops, GeoPoint(0.0, 0.0)))
+    }
+
+    @Test
+    fun arrivalTimesUsePreviousStopServiceMinutes() {
+        val stops = listOf(
+            DeliveryStop(
+                id = "first",
+                customerName = "Primera",
+                address = "Primera",
+                location = GeoPoint(0.0, 0.0),
+                orderIndex = 0,
+                serviceMinutes = 2,
+            ),
+            DeliveryStop(
+                id = "second",
+                customerName = "Segunda",
+                address = "Segunda",
+                location = GeoPoint(0.0, 0.0),
+                orderIndex = 1,
+                serviceMinutes = 10,
+            ),
+        )
+
+        val arrivals = com.example.ruts.domain.RouteEstimator.arrivalTimesMillis(
+            startMillis = 1_000L,
+            start = GeoPoint(0.0, 0.0),
+            stops = stops,
+        )
+
+        assertEquals(1_000L, arrivals[0].second)
+        assertEquals(121_000L, arrivals[1].second)
+    }
+
+    @Test
     fun resolveNextRouteNameStartsEmptyThenAddsSuffix() {
         val dayMillis = 1_700_000_000_000L
         val first = Route(createdAtMillis = dayMillis, name = "")

@@ -79,12 +79,11 @@ fun RouteMapView(
         }
     }
 
-    val cameraSignature = remember(stops, activeStopId, startLocation, currentLocation, focusPoint) {
+    val cameraSignature = remember(stops, activeStopId, startLocation, focusPoint) {
         buildString {
             append("active=$activeStopId")
             append("|focus=${focusPoint?.latitude},${focusPoint?.longitude}")
             append("|start=${startLocation?.latitude},${startLocation?.longitude}")
-            append("|current=${currentLocation?.latitude},${currentLocation?.longitude}")
             stops.forEach { stop ->
                 append("|${stop.id}:${stop.location?.latitude},${stop.location?.longitude}")
             }
@@ -110,7 +109,6 @@ fun RouteMapView(
 
         val stopLocations = stops.mapNotNull { it.location }
         val points = buildList {
-            currentLocation?.let { add(it) }
             startLocation?.let { add(it) }
             addAll(stopLocations)
         }
@@ -207,7 +205,8 @@ fun RouteMapView(
                     map.overlays += Marker(map).apply {
                         position = OsmGeoPoint(location.latitude, location.longitude)
                         title = "Tu ubicación"
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = createCurrentLocationMarkerDrawable(context.resources)
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                 }
 
@@ -257,6 +256,27 @@ fun RouteMapView(
             },
         )
     }
+}
+
+private fun createCurrentLocationMarkerDrawable(
+    resources: android.content.res.Resources,
+): BitmapDrawable {
+    val size = 48
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val outerRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+    val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#0A84FF")
+        style = Paint.Style.FILL
+    }
+
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 2f, outerRing)
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 8f, fill)
+
+    return BitmapDrawable(resources, bitmap)
 }
 
 private fun createNumberedMarkerDrawable(

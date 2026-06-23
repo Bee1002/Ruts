@@ -13,8 +13,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -29,6 +29,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberBottomSheetScaffoldState
@@ -46,20 +47,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import android.Manifest
 import android.app.Activity
 import android.view.WindowManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import com.example.ruts.data.RouteRepository
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.Route
 import com.example.ruts.domain.RouteOptimizer
+import com.example.ruts.domain.StopOrderPreference
 import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
 import com.example.ruts.domain.displayLabel
 import com.example.ruts.domain.formatTime
 import com.example.ruts.domain.RouteEstimator
+import com.example.ruts.domain.routeDisplayTitle
 import com.example.ruts.geocoding.GeocodingHelper
+import com.example.ruts.location.LocationHelper
 import com.example.ruts.maps.MapsNavigator
 import com.example.ruts.presentation.components.CompletedStopDetailView
 import com.example.ruts.presentation.components.PendingStopWorkView
@@ -90,8 +97,11 @@ fun RouteDetailScreen(
     val sheetState = rememberBottomSheetScaffoldState()
 
     val geocodingHelper = remember { GeocodingHelper(context) }
+    val locationHelper = remember { LocationHelper(context) }
 
     var route by remember { mutableStateOf<Route?>(null) }
+    var currentLocation by remember { mutableStateOf<GeoPoint?>(null) }
+    var hasLocationPermission by remember { mutableStateOf(false) }
     var allRoutes by remember { mutableStateOf(emptyList<Route>()) }
     var selectedStopId by remember { mutableStateOf<String?>(null) }
     var statusChangedAtMillis by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
@@ -100,6 +110,30 @@ fun RouteDetailScreen(
     var showRouteSummary by remember { mutableStateOf(false) }
     var routeCompletedAtMillis by remember { mutableStateOf<Long?>(null) }
     var startAddress by remember { mutableStateOf<String?>(null) }
+    var pendingRouteChangeOriginalStops by remember { mutableStateOf<Map<String, DeliveryStop>>(emptyMap()) }
+    var showApplyRouteChangesDialog by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { permissions ->
+        hasLocationPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+    }
+
+    LaunchedEffect(Unit) {
+        permissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ),
+        )
+    }
+
+    LaunchedEffect(hasLocationPermission) {
+        if (!hasLocationPermission) return@LaunchedEffect
+        currentLocation = locationHelper.getCurrentLocation()
+        locationHelper.locationUpdates().collect { currentLocation = it }
+    }
 
     fun reload(routeToSelect: String = routeId) {
         allRoutes = repository.getAllRoutes()
@@ -116,6 +150,8 @@ fun RouteDetailScreen(
         showRouteCompleted = false
         showRouteSummary = false
         routeCompletedAtMillis = null
+        pendingRouteChangeOriginalStops = emptyMap()
+        showApplyRouteChangesDialog = false
         reload()
     }
 
@@ -133,6 +169,38 @@ fun RouteDetailScreen(
     fun updateStops(transform: (List<DeliveryStop>) -> List<DeliveryStop>) {
         val currentRoute = route ?: return
         persist(currentRoute.copy(stops = transform(currentRoute.stops).reindexStops()))
+    }
+
+    fun updateRouteAffectingStop(stopId: String, transform: (DeliveryStop) -> DeliveryStop) {
+        val currentRoute = route ?: return
+        val currentStop = currentRoute.stops.firstOrNull { it.id == stopId } ?: return
+        val originalStop = pendingRouteChangeOriginalStops[stopId] ?: currentStop
+        var updatedStop: DeliveryStop? = null
+        val updatedStops = currentRoute.stops.map { stop ->
+            if (stop.id == stopId) {
+                transform(stop).also { updatedStop = it }
+            } else {
+                stop
+            }
+        }
+
+        pendingRouteChangeOriginalStops = if (updatedStop == originalStop) {
+            pendingRouteChangeOriginalStops - stopId
+        } else {
+            pendingRouteChangeOriginalStops + (stopId to originalStop)
+        }
+        persist(currentRoute.copy(stops = updatedStops.reindexStops()))
+    }
+
+    fun discardPendingRouteChanges() {
+        if (pendingRouteChangeOriginalStops.isEmpty()) return
+        updateStops { stops ->
+            stops.map { stop ->
+                pendingRouteChangeOriginalStops[stop.id] ?: stop
+            }
+        }
+        pendingRouteChangeOriginalStops = emptyMap()
+        showApplyRouteChangesDialog = false
     }
 
     fun handleDeleteRoute(deletedRouteId: String) {
@@ -339,6 +407,7 @@ fun RouteDetailScreen(
                                         }
                                     }
                                     statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
+                                    pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
                                     clearStopSelection()
                                 }
                             },
@@ -353,6 +422,7 @@ fun RouteDetailScreen(
                                         }
                                     }
                                     statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
+                                    pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
                                     clearStopSelection()
                                 }
                             },
@@ -374,6 +444,7 @@ fun RouteDetailScreen(
                             onDeleteStop = { stop ->
                                 updateStops { stops -> stops.filterNot { it.id == stop.id } }
                                 statusChangedAtMillis = statusChangedAtMillis - stop.id
+                                pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
                                 if (selectedStopId == stop.id) {
                                     selectedStopId = null
                                 }
@@ -385,6 +456,7 @@ fun RouteDetailScreen(
                                     }
                                 }
                             },
+                            onRouteAffectingStopUpdate = ::updateRouteAffectingStop,
                             onOptimize = {
                                 val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
                                 persist(
@@ -393,7 +465,11 @@ fun RouteDetailScreen(
                                         optimizedAtMillis = System.currentTimeMillis(),
                                     ),
                                 )
+                                pendingRouteChangeOriginalStops = emptyMap()
+                                showApplyRouteChangesDialog = false
                             },
+                            onDiscardRouteChanges = ::discardPendingRouteChanges,
+                            onShowApplyRouteChanges = { showApplyRouteChangesDialog = true },
                             onAddStop = { onEditRoute(currentRoute.id) },
                             onStopSelected = { selectedStop -> selectStop(selectedStop.id) },
                             onNavigateToStart = {
@@ -407,11 +483,12 @@ fun RouteDetailScreen(
                             onCloseRouteCompleted = { showRouteCompleted = false },
                             onEditArrivalPoint = { onEditRoute(currentRoute.id) },
                             onCreateNewRoute = onCreateRoute,
+                            pendingRouteChangeCount = pendingRouteChangeOriginalStops.size,
                         )
                     },
                 ) { innerPadding ->
                     RouteMapView(
-                        currentLocation = null,
+                        currentLocation = currentLocation,
                         startLocation = currentRoute.startLocation,
                         stops = orderedStops,
                         activeStopId = activeStop?.id,
@@ -425,6 +502,54 @@ fun RouteDetailScreen(
                         modifier = Modifier
                             .padding(innerPadding)
                             .fillMaxSize(),
+                    )
+                }
+
+                if (showApplyRouteChangesDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showApplyRouteChangesDialog = false },
+                        title = { Text("Aplicar cambios (${pendingRouteChangeOriginalStops.size})") },
+                        text = {
+                            Text("Elige si quieres aplicar solo las prioridades editadas o recalcular toda la ruta.")
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    val updatedStops = currentRoute.stops.applyOrderPreferencesPreservingRoute()
+                                    persist(
+                                        currentRoute.copy(
+                                            stops = updatedStops,
+                                            optimizedAtMillis = System.currentTimeMillis(),
+                                        ),
+                                    )
+                                    pendingRouteChangeOriginalStops = emptyMap()
+                                    showApplyRouteChangesDialog = false
+                                    selectedStopId = null
+                                    editingStopId = null
+                                },
+                            ) {
+                                Text("Actualizar ruta")
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
+                                    persist(
+                                        currentRoute.copy(
+                                            stops = optimized,
+                                            optimizedAtMillis = System.currentTimeMillis(),
+                                        ),
+                                    )
+                                    pendingRouteChangeOriginalStops = emptyMap()
+                                    showApplyRouteChangesDialog = false
+                                    selectedStopId = null
+                                    editingStopId = null
+                                },
+                            ) {
+                                Text("Volver a optimizar")
+                            }
+                        },
                     )
                 }
             }
@@ -492,7 +617,10 @@ private fun RouteWorkSheet(
     onCancelEdit: () -> Unit,
     onDeleteStop: (DeliveryStop) -> Unit,
     onUpdateStop: (String, (DeliveryStop) -> DeliveryStop) -> Unit,
+    onRouteAffectingStopUpdate: (String, (DeliveryStop) -> DeliveryStop) -> Unit,
     onOptimize: () -> Unit,
+    onDiscardRouteChanges: () -> Unit,
+    onShowApplyRouteChanges: () -> Unit,
     onAddStop: () -> Unit,
     onStopSelected: (DeliveryStop) -> Unit,
     onNavigateToStart: () -> Unit,
@@ -500,6 +628,7 @@ private fun RouteWorkSheet(
     onCloseRouteCompleted: () -> Unit,
     onEditArrivalPoint: () -> Unit,
     onCreateNewRoute: () -> Unit,
+    pendingRouteChangeCount: Int,
 ) {
     val delivered = route.stops.count { it.status == StopStatus.Delivered }
     val failed = route.stops.count { it.status == StopStatus.Failed }
@@ -545,7 +674,14 @@ private fun RouteWorkSheet(
                     onPackageCountChange = { count ->
                         onUpdateStop(activeStop.id) { it.copy(packageCount = count.coerceAtLeast(1)) }
                     },
-                    onOrderPreferenceChange = { },
+                    onServiceMinutesChange = { minutes ->
+                        onRouteAffectingStopUpdate(activeStop.id) {
+                            it.copy(serviceMinutes = minutes.coerceIn(1, 60))
+                        }
+                    },
+                    onOrderPreferenceChange = { preference ->
+                        onRouteAffectingStopUpdate(activeStop.id) { it.copy(orderPreference = preference) }
+                    },
                     onDelete = { onDeleteStop(activeStop) },
                     onBack = onCancelEdit,
                 )
@@ -585,13 +721,20 @@ private fun RouteWorkSheet(
                         onPackageCountChange = { count ->
                             onUpdateStop(activeStop.id) { it.copy(packageCount = count.coerceAtLeast(1)) }
                         },
-                        onOrderPreferenceChange = { },
+                        onServiceMinutesChange = { minutes ->
+                            onRouteAffectingStopUpdate(activeStop.id) {
+                                it.copy(serviceMinutes = minutes.coerceIn(1, 60))
+                            }
+                        },
+                        onOrderPreferenceChange = { preference ->
+                            onRouteAffectingStopUpdate(activeStop.id) { it.copy(orderPreference = preference) }
+                        },
                         onDelete = { onDeleteStop(activeStop) },
                         onBack = onCancelEdit,
                     )
                 }
 
-                activeStop != null && activeStop.status == StopStatus.Pending -> {
+                activeStop != null && activeStop.status == StopStatus.Pending && isStopFocused -> {
                     PendingStopWorkView(
                         stop = activeStop,
                         stopPosition = activeStop.orderIndex + 1,
@@ -606,7 +749,7 @@ private fun RouteWorkSheet(
                     )
                 }
 
-                activeStop == null -> {
+                activeStop == null && orderedStops.isEmpty() -> {
                     RutsCard(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = "Agrega paradas para empezar.",
@@ -616,16 +759,40 @@ private fun RouteWorkSheet(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = onOptimize,
-                    modifier = Modifier.weight(1f),
-                    enabled = route.stops.size > 1,
-                ) {
-                    Text("Optimizar")
+            if (pendingRouteChangeCount > 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onDiscardRouteChanges,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Descartar")
+                    }
+                    Button(
+                        onClick = onShowApplyRouteChanges,
+                        modifier = Modifier.weight(2f),
+                    ) {
+                        Text("Aplicar cambios ($pendingRouteChangeCount)")
+                    }
                 }
-                OutlinedButton(onClick = onAddStop, modifier = Modifier.weight(1f)) {
+            } else if (isStopFocused || editingStopId != null) {
+                OutlinedButton(
+                    onClick = onAddStop,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text("Agregar parada")
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onOptimize,
+                        modifier = Modifier.weight(1f),
+                        enabled = route.stops.size > 1,
+                    ) {
+                        Text("Optimizar")
+                    }
+                    OutlinedButton(onClick = onAddStop, modifier = Modifier.weight(1f)) {
+                        Text("Agregar parada")
+                    }
                 }
             }
         }
@@ -645,7 +812,6 @@ private fun RouteWorkSheet(
                         stop = stop,
                         isActive = stop.id == activeStop?.id,
                         onClick = { onStopSelected(stop) },
-                        onDelete = { onDeleteStop(stop) },
                     )
                 }
             }
@@ -658,7 +824,6 @@ private fun StopListItem(
     stop: DeliveryStop,
     isActive: Boolean,
     onClick: () -> Unit,
-    onDelete: () -> Unit,
 ) {
     RutsCard(
         modifier = Modifier.fillMaxWidth(),
@@ -681,7 +846,7 @@ private fun StopListItem(
                 },
             )
             Column(modifier = Modifier.weight(1f)) {
-                Text(stop.address, style = MaterialTheme.typography.bodyMedium)
+                Text(stop.routeDisplayTitle(), style = MaterialTheme.typography.bodyMedium)
                 Text(
                     text = buildString {
                         append(stop.status.label())
@@ -700,13 +865,6 @@ private fun StopListItem(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Eliminar parada",
-                    tint = MaterialTheme.colorScheme.error,
-                )
             }
         }
     }
@@ -761,4 +919,19 @@ private fun List<DeliveryStop>.reindexStops(): List<DeliveryStop> {
     return sortedBy { it.orderIndex }.mapIndexed { index, stop ->
         stop.copy(orderIndex = index)
     }
+}
+
+private fun List<DeliveryStop>.applyOrderPreferencesPreservingRoute(): List<DeliveryStop> {
+    val orderedStops = sortedBy { it.orderIndex }
+    val reorderablePendingStops = orderedStops.filter { stop ->
+        stop.status == StopStatus.Pending && stop.location != null
+    }
+    val otherStops = orderedStops.filterNot { stop -> stop in reorderablePendingStops }
+
+    val firstStops = reorderablePendingStops.filter { it.orderPreference == StopOrderPreference.First }
+    val automaticStops = reorderablePendingStops.filter { it.orderPreference == StopOrderPreference.Automatic }
+    val lastStops = reorderablePendingStops.filter { it.orderPreference == StopOrderPreference.Last }
+
+    return (firstStops + automaticStops + lastStops + otherStops)
+        .mapIndexed { index, stop -> stop.copy(orderIndex = index) }
 }

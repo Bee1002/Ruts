@@ -58,6 +58,7 @@ import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.Route
 import com.example.ruts.domain.RouteEstimator
 import com.example.ruts.domain.RouteOptimizer
+import com.example.ruts.domain.findReusableStopForAddress
 import com.example.ruts.domain.formatDuration
 import com.example.ruts.domain.normalizeSpokenAddress
 import com.example.ruts.geocoding.AddressResult
@@ -114,6 +115,7 @@ fun RouteEditorScreen(
     var isSearching by remember { mutableStateOf(false) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
     var optimizationState by remember { mutableStateOf(OptimizationUiState.Idle) }
+    var sheetWasExpanded by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -198,15 +200,18 @@ fun RouteEditorScreen(
 
     LaunchedEffect(sheetState.bottomSheetState.currentValue) {
         when (sheetState.bottomSheetState.currentValue) {
+            SheetValue.Expanded -> {
+                sheetWasExpanded = true
+            }
             SheetValue.PartiallyExpanded -> {
-                if (!searchExpanded) {
+                if (!searchExpanded && sheetWasExpanded) {
                     selectedStopId = null
+                    sheetWasExpanded = false
                 }
             }
             SheetValue.Hidden -> {
                 scope.launch { sheetState.bottomSheetState.partialExpand() }
             }
-            else -> Unit
         }
     }
 
@@ -237,6 +242,38 @@ fun RouteEditorScreen(
 
     fun addStop(result: AddressResult) {
         val currentRoute = route ?: return
+        val reusableStop = findReusableStopForAddress(
+            stops = currentRoute.stops,
+            address = result.address,
+            location = result.location,
+        )
+
+        if (reusableStop != null) {
+            val updatedRoute = currentRoute.copy(
+                stops = currentRoute.stops.map { stop ->
+                    if (stop.id == reusableStop.id) {
+                        stop.copy(packageCount = stop.packageCount + 1)
+                    } else {
+                        stop
+                    }
+                },
+            )
+            route = updatedRoute
+            repository.saveRoute(updatedRoute)
+            searchBias = SearchBias(
+                locality = result.locality ?: searchBias?.locality,
+                anchor = result.location,
+            )
+            selectedStopId = reusableStop.id
+            searchQuery = ""
+            searchResults = emptyList()
+            searchExpanded = false
+            scope.launch {
+                sheetState.bottomSheetState.expand()
+            }
+            return
+        }
+
         val newStop = DeliveryStop(
             customerName = result.address.substringBefore(",").ifBlank { "Parada" },
             address = result.address,
@@ -468,6 +505,11 @@ fun RouteEditorScreen(
                                     onPackageCountChange = { count ->
                                         updateStop(selectedStop.id) {
                                             it.copy(packageCount = count.coerceAtLeast(1))
+                                        }
+                                    },
+                                    onServiceMinutesChange = { minutes ->
+                                        updateStop(selectedStop.id) {
+                                            it.copy(serviceMinutes = minutes.coerceIn(1, 60))
                                         }
                                     },
                                     onOrderPreferenceChange = { preference ->

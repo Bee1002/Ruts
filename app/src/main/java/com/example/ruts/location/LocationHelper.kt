@@ -9,6 +9,9 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -53,6 +56,27 @@ class LocationHelper(context: Context) {
                     fusedClient.removeLocationUpdates(callback)
                 }
             }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun locationUpdates(intervalMillis: Long = 3_000L): Flow<GeoPoint> = callbackFlow {
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMillis)
+            .setMinUpdateIntervalMillis(1_000L)
+            .build()
+
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                val location = result.lastLocation ?: return
+                trySend(GeoPoint(location.latitude, location.longitude))
+            }
+        }
+
+        fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
+            .addOnFailureListener { close() }
+
+        awaitClose {
+            fusedClient.removeLocationUpdates(callback)
         }
     }
 

@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Check
@@ -23,7 +24,6 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -60,6 +60,7 @@ fun StopDetailEditor(
     onNotesChange: (String) -> Unit,
     onTypeChange: (StopType) -> Unit,
     onPackageCountChange: (Int) -> Unit,
+    onServiceMinutesChange: (Int) -> Unit,
     onOrderPreferenceChange: (StopOrderPreference) -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
@@ -155,7 +156,7 @@ fun StopDetailEditor(
         HorizontalDivider(color = Border)
 
         SettingRow(
-            icon = { Icon(Icons.Default.Sort, contentDescription = null, tint = TextSecondary) },
+            icon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, tint = TextSecondary) },
             label = "Orden",
             content = {
                 SegmentedControl(
@@ -197,10 +198,11 @@ fun StopDetailEditor(
             icon = { Icon(Icons.Default.Timer, contentDescription = null, tint = TextSecondary) },
             label = "Tiempo esti...",
             content = {
-                Text(
-                    text = "Predeterminado (5 min)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
+                PackageStepper(
+                    count = stop.serviceMinutes,
+                    valueLabel = "${stop.serviceMinutes} min",
+                    onDecrease = { onServiceMinutesChange((stop.serviceMinutes - 1).coerceAtLeast(1)) },
+                    onIncrease = { onServiceMinutesChange((stop.serviceMinutes + 1).coerceAtMost(60)) },
                 )
             },
         )
@@ -462,6 +464,7 @@ private fun SegmentedControl(
 @Composable
 private fun PackageStepper(
     count: Int,
+    valueLabel: String = count.toString(),
     onDecrease: () -> Unit,
     onIncrease: () -> Unit,
 ) {
@@ -474,7 +477,7 @@ private fun PackageStepper(
     ) {
         StepperButton(label = "−", onClick = onDecrease)
         Text(
-            text = count.toString(),
+            text = valueLabel,
             modifier = Modifier.padding(horizontal = 16.dp),
             style = MaterialTheme.typography.titleMedium,
             color = White,
