@@ -1,9 +1,9 @@
 package com.example.ruts.presentation.components
 
+import android.graphics.Paint
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.view.ViewGroup
@@ -23,8 +23,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
+import com.example.ruts.domain.StopOrderPreference
 import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
+import com.example.ruts.routing.OsrmRouteClient
 import com.example.ruts.ui.theme.pendingMarkerArgb
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.XYTileSource
@@ -36,24 +38,27 @@ import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.gestures.RotationGestureOverlay
 
 private val MinimalStreetTileSource = XYTileSource(
-    "CartoVoyager",
+    "CartoPositron",
     0,
     20,
     256,
-    ".png",
+    "@2x.png",
     arrayOf(
-        "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-        "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-        "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
-        "https://d.basemaps.cartocdn.com/rastertiles/voyager/",
+        "https://a.basemaps.cartocdn.com/light_all/",
+        "https://b.basemaps.cartocdn.com/light_all/",
+        "https://c.basemaps.cartocdn.com/light_all/",
+        "https://d.basemaps.cartocdn.com/light_all/",
     ),
     "© OpenStreetMap contributors © CARTO",
 )
 
-private const val MAP_BACKGROUND_COLOR = "#F8F4F0"
+private const val MAP_BACKGROUND_COLOR = "#FAFAFA"
 
 private const val ACTIVE_STOP_ZOOM = 16.0
 private const val OVERVIEW_ZOOM = 15.0
+// ~65% opacity — lets street labels show through like Google Maps navigation
+private const val ROUTE_LINE_COLOR = 0xA64285F4.toInt()
+private const val ROUTE_LINE_WIDTH = 13f
 
 @Composable
 fun RouteMapView(
@@ -69,6 +74,7 @@ fun RouteMapView(
 ) {
     val context = LocalContext.current
     var mapView by remember { mutableStateOf<MapView?>(null) }
+    val osrmUserAgent = remember { "${context.packageName}/1.0 (Android)" }
 
     remember {
         Configuration.getInstance().apply {
@@ -87,6 +93,45 @@ fun RouteMapView(
             stops.forEach { stop ->
                 append("|${stop.id}:${stop.location?.latitude},${stop.location?.longitude}")
             }
+        }
+    }
+
+    val routeWaypoints = remember(drawRoutePath, roundTrip, startLocation, stops) {
+        if (!drawRoutePath || startLocation == null) {
+            emptyList()
+        } else {
+            buildList {
+                add(startLocation)
+                stops.sortedBy { it.orderIndex }.forEach { stop ->
+                    val location = stop.location ?: return@forEach
+                    add(location)
+                }
+                if (roundTrip && stops.isNotEmpty()) {
+                    add(startLocation)
+                }
+            }
+        }
+    }
+    val routePathSignature = remember(routeWaypoints) {
+        routeWaypoints.joinToString(separator = "|") { point ->
+            "${point.latitude},${point.longitude}"
+        }
+    }
+    var routedRoutePath by remember { mutableStateOf<List<GeoPoint>?>(null) }
+
+    LaunchedEffect(routePathSignature, osrmUserAgent) {
+        routedRoutePath = null
+        if (routeWaypoints.size >= 2) {
+            routedRoutePath = OsrmRouteClient.fetchRouteGeometry(
+                waypoints = routeWaypoints,
+                userAgent = osrmUserAgent,
+            )
+        }
+    }
+
+    LaunchedEffect(routedRoutePath, mapView) {
+        mapView?.post {
+            mapView?.invalidate()
         }
     }
 
@@ -179,34 +224,16 @@ fun RouteMapView(
             update = { map ->
                 map.overlays.removeAll { overlay -> overlay is Marker || overlay is Polyline }
 
-                if (drawRoutePath && startLocation != null) {
-                    val routePoints = buildList {
-                        add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
-                        stops.sortedBy { it.orderIndex }.forEach { stop ->
-                            val location = stop.location ?: return@forEach
-                            add(OsmGeoPoint(location.latitude, location.longitude))
-                        }
-                        if (roundTrip && stops.isNotEmpty()) {
-                            add(OsmGeoPoint(startLocation.latitude, startLocation.longitude))
-                        }
+                if (drawRoutePath && routeWaypoints.isNotEmpty()) {
+                    val routePoints = (routedRoutePath ?: routeWaypoints).map { point ->
+                        OsmGeoPoint(point.latitude, point.longitude)
                     }
 
                     if (routePoints.size >= 2) {
                         map.overlays += Polyline().apply {
                             setPoints(routePoints)
-                            outlinePaint.color = Color.parseColor("#0A84FF")
-                            outlinePaint.strokeWidth = 14f
-                            outlinePaint.isAntiAlias = true
+                            applyRouteLineStyle(ROUTE_LINE_COLOR, ROUTE_LINE_WIDTH)
                         }
-                    }
-                }
-
-                currentLocation?.let { location ->
-                    map.overlays += Marker(map).apply {
-                        position = OsmGeoPoint(location.latitude, location.longitude)
-                        title = "Tu ubicación"
-                        icon = createCurrentLocationMarkerDrawable(context.resources)
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                 }
 
@@ -224,7 +251,14 @@ fun RouteMapView(
 
                     map.overlays += Marker(map).apply {
                         position = OsmGeoPoint(location.latitude, location.longitude)
-                        title = "Parada ${index + 1}: ${stop.address}"
+                        title = buildString {
+                            append("Parada ${index + 1}: ${stop.address}")
+                            when (stop.orderPreference) {
+                                StopOrderPreference.First -> append(" · Primera")
+                                StopOrderPreference.Last -> append(" · Última")
+                                StopOrderPreference.Automatic -> Unit
+                            }
+                        }
                         if (onStopClick != null) {
                             setOnMarkerClickListener { _, _ ->
                                 onStopClick(stop.id)
@@ -237,9 +271,19 @@ fun RouteMapView(
                             isActive = isActive,
                             status = stop.status,
                             stopType = stop.stopType,
+                            orderPreference = stop.orderPreference,
                             useBlueHighlight = drawRoutePath,
                         )
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    }
+                }
+
+                currentLocation?.let { location ->
+                    map.overlays += Marker(map).apply {
+                        position = OsmGeoPoint(location.latitude, location.longitude)
+                        title = "Tu ubicación"
+                        icon = createCurrentLocationMarkerDrawable(context.resources)
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                 }
 
@@ -279,12 +323,16 @@ private fun createCurrentLocationMarkerDrawable(
     return BitmapDrawable(resources, bitmap)
 }
 
+private const val PREFERENCE_BADGE_FIRST_COLOR = "#34C759"
+private const val PREFERENCE_BADGE_LAST_COLOR = "#FF9500"
+
 private fun createNumberedMarkerDrawable(
     resources: android.content.res.Resources,
     number: Int,
     isActive: Boolean,
     status: StopStatus,
     stopType: StopType,
+    orderPreference: StopOrderPreference = StopOrderPreference.Automatic,
     useBlueHighlight: Boolean = false,
 ): BitmapDrawable {
     val size = 96
@@ -320,5 +368,60 @@ private fun createNumberedMarkerDrawable(
     val markerLabel = if (status == StopStatus.Failed) "X" else number.toString()
     canvas.drawText(markerLabel, size / 2f, size / 2.4f + 12f, text)
 
+    if (status == StopStatus.Pending && orderPreference != StopOrderPreference.Automatic) {
+        drawOrderPreferenceBadge(
+            canvas = canvas,
+            orderPreference = orderPreference,
+            markerSize = size,
+        )
+    }
+
     return BitmapDrawable(resources, bitmap)
+}
+
+private fun drawOrderPreferenceBadge(
+    canvas: Canvas,
+    orderPreference: StopOrderPreference,
+    markerSize: Int,
+) {
+    val badgeRadius = 14f
+    val centerX = markerSize - 20f
+    val centerY = 20f
+    val fillColor = when (orderPreference) {
+        StopOrderPreference.First -> Color.parseColor(PREFERENCE_BADGE_FIRST_COLOR)
+        StopOrderPreference.Last -> Color.parseColor(PREFERENCE_BADGE_LAST_COLOR)
+        StopOrderPreference.Automatic -> return
+    }
+    val label = when (orderPreference) {
+        StopOrderPreference.First -> "↑"
+        StopOrderPreference.Last -> "↓"
+        StopOrderPreference.Automatic -> return
+    }
+
+    val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+    val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = fillColor
+        style = Paint.Style.FILL
+    }
+    val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        textSize = 18f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+
+    canvas.drawCircle(centerX, centerY, badgeRadius + 2f, ring)
+    canvas.drawCircle(centerX, centerY, badgeRadius, fill)
+    canvas.drawText(label, centerX, centerY + 6f, text)
+}
+
+private fun Polyline.applyRouteLineStyle(strokeColor: Int, strokeWidth: Float) {
+    outlinePaint.color = strokeColor
+    outlinePaint.strokeWidth = strokeWidth
+    outlinePaint.isAntiAlias = true
+    outlinePaint.strokeJoin = Paint.Join.ROUND
+    outlinePaint.strokeCap = Paint.Cap.ROUND
 }

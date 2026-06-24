@@ -116,22 +116,13 @@ fun RouteEditorScreen(
     var searchJob by remember { mutableStateOf<Job?>(null) }
     var optimizationState by remember { mutableStateOf(OptimizationUiState.Idle) }
     var sheetWasExpanded by remember { mutableStateOf(false) }
+    var hasLocationPermission by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { permissions ->
-        if (permissions.values.any { it }) {
-            scope.launch {
-                currentLocation = locationHelper.getCurrentLocation()
-                route?.let { currentRoute ->
-                    if (currentRoute.startLocation == null && currentLocation != null) {
-                        val updated = currentRoute.copy(startLocation = currentLocation)
-                        route = updated
-                        repository.saveRoute(updated)
-                    }
-                }
-            }
-        }
+        hasLocationPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
     }
 
     val voiceLauncher = rememberLauncherForActivityResult(
@@ -160,6 +151,12 @@ fun RouteEditorScreen(
                 Manifest.permission.ACCESS_COARSE_LOCATION,
             ),
         )
+    }
+
+    LaunchedEffect(hasLocationPermission) {
+        if (!hasLocationPermission) return@LaunchedEffect
+        currentLocation = locationHelper.getCurrentLocation()
+        locationHelper.locationUpdates().collect { currentLocation = it }
     }
 
     LaunchedEffect(route?.id, currentLocation) {
@@ -327,18 +324,30 @@ fun RouteEditorScreen(
 
     fun optimizeRoute() {
         val currentRoute = route ?: return
-        val startPoint = currentRoute.startLocation ?: currentLocation ?: return
         if (currentRoute.stops.size < 2) return
 
         optimizationState = OptimizationUiState.Optimizing
 
         scope.launch {
+            val startPoint = currentRoute.startLocation ?: currentLocation ?: locationHelper.getCurrentLocation()
+            if (startPoint == null) {
+                optimizationState = OptimizationUiState.Idle
+                return@launch
+            }
+            val routeToOptimize = if (currentRoute.startLocation == null) {
+                currentRoute.copy(startLocation = startPoint).also { updated ->
+                    route = updated
+                    repository.saveRoute(updated)
+                }
+            } else {
+                currentRoute
+            }
             val optimizedDeferred = async {
-                RouteOptimizer.optimize(currentRoute.stops, startPoint)
+                RouteOptimizer.optimize(routeToOptimize.stops, startPoint)
             }
             delay(2500)
             val optimizedStops = optimizedDeferred.await()
-            val updatedRoute = currentRoute.copy(
+            val updatedRoute = routeToOptimize.copy(
                 stops = optimizedStops,
                 optimizedAtMillis = System.currentTimeMillis(),
             )
@@ -586,7 +595,8 @@ fun RouteEditorScreen(
                     startLocation = currentRoute.startLocation ?: currentLocation,
                     stops = currentRoute.stops,
                     activeStopId = highlightedStopId,
-                    drawRoutePath = isOptimizedView,
+                    drawRoutePath = currentRoute.stops.size > 1 &&
+                        (currentRoute.startLocation ?: currentLocation) != null,
                     modifier = Modifier.fillMaxSize(),
                 )
 

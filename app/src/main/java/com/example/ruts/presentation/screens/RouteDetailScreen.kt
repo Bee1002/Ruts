@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import android.Manifest
@@ -112,6 +113,7 @@ fun RouteDetailScreen(
     var startAddress by remember { mutableStateOf<String?>(null) }
     var pendingRouteChangeOriginalStops by remember { mutableStateOf<Map<String, DeliveryStop>>(emptyMap()) }
     var showApplyRouteChangesDialog by remember { mutableStateOf(false) }
+    var useCompactSheetPeek by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -152,6 +154,7 @@ fun RouteDetailScreen(
         routeCompletedAtMillis = null
         pendingRouteChangeOriginalStops = emptyMap()
         showApplyRouteChangesDialog = false
+        useCompactSheetPeek = false
         reload()
     }
 
@@ -164,6 +167,14 @@ fun RouteDetailScreen(
         repository.saveRoute(updatedRoute)
         route = updatedRoute
         allRoutes = repository.getAllRoutes()
+    }
+
+    LaunchedEffect(route?.id, currentLocation) {
+        val currentRoute = route ?: return@LaunchedEffect
+        val location = currentLocation ?: return@LaunchedEffect
+        if (currentRoute.startLocation == null) {
+            persist(currentRoute.copy(startLocation = location))
+        }
     }
 
     fun updateStops(transform: (List<DeliveryStop>) -> List<DeliveryStop>) {
@@ -286,7 +297,8 @@ fun RouteDetailScreen(
                     selectedStop != null -> selectedStop
                     else -> nextPendingStop
                 }
-                val startPoint = currentRoute.startLocation ?: GeoPoint(40.4168, -3.7038)
+                val liveStartPoint = currentRoute.startLocation ?: currentLocation
+                val startPoint = liveStartPoint ?: GeoPoint(40.4168, -3.7038)
                 val resolvedStartAddress = startAddress ?: "Ubicación de inicio"
 
                 LaunchedEffect(allStopsResolved) {
@@ -309,17 +321,46 @@ fun RouteDetailScreen(
                     RouteEstimator.totalDistanceKm(orderedStops, startPoint),
                 )
 
-                fun selectStop(stopId: String) {
+                fun focusPendingStop(stopId: String) {
                     selectedStopId = stopId
                     editingStopId = null
+                    useCompactSheetPeek = true
                     showRouteCompleted = false
                     showRouteSummary = false
-                    scope.launch { sheetState.bottomSheetState.expand() }
+                    scope.launch { sheetState.bottomSheetState.partialExpand() }
+                }
+
+                fun selectStop(stopId: String) {
+                    val stop = route?.stops?.firstOrNull { it.id == stopId } ?: return
+                    showRouteCompleted = false
+                    showRouteSummary = false
+                    if (stop.status == StopStatus.Pending) {
+                        focusPendingStop(stopId)
+                    } else {
+                        selectedStopId = stopId
+                        editingStopId = null
+                        useCompactSheetPeek = false
+                        scope.launch { sheetState.bottomSheetState.expand() }
+                    }
                 }
 
                 fun clearStopSelection() {
                     selectedStopId = null
                     editingStopId = null
+                    useCompactSheetPeek = false
+                }
+
+                fun advanceToNextPendingStop(afterStopId: String) {
+                    val ordered = route?.stops?.sortedBy { it.orderIndex }.orEmpty()
+                    val afterIndex = ordered.firstOrNull { it.id == afterStopId }?.orderIndex ?: Int.MAX_VALUE
+                    val nextStop = ordered.firstOrNull { stop ->
+                        stop.status == StopStatus.Pending && stop.orderIndex > afterIndex
+                    } ?: ordered.firstOrNull { it.status == StopStatus.Pending }
+                    if (nextStop != null) {
+                        focusPendingStop(nextStop.id)
+                    } else {
+                        clearStopSelection()
+                    }
                 }
 
                 val activeStopSubtitle = if (activeStop != null) {
@@ -351,10 +392,24 @@ fun RouteDetailScreen(
                     }
                 }
 
+                val configuration = LocalConfiguration.current
+                val focusedStopForPeek = orderedStops.firstOrNull { it.id == selectedStopId }
+                val compactPeekFraction = if (focusedStopForPeek?.notes?.isNotBlank() == true) {
+                    0.33f
+                } else {
+                    0.28f
+                }
+                val compactSheetPeek = (configuration.screenHeightDp * compactPeekFraction).dp
+                val sheetPeekHeight = if (useCompactSheetPeek && selectedStopId != null) {
+                    compactSheetPeek
+                } else {
+                    280.dp
+                }
+
                 BottomSheetScaffold(
                     modifier = Modifier.fillMaxSize(),
                     scaffoldState = sheetState,
-                    sheetPeekHeight = 280.dp,
+                    sheetPeekHeight = sheetPeekHeight,
                     containerColor = MaterialTheme.colorScheme.background,
                     sheetContainerColor = MaterialTheme.colorScheme.surface,
                     topBar = {
@@ -408,7 +463,7 @@ fun RouteDetailScreen(
                                     }
                                     statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
                                     pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
-                                    clearStopSelection()
+                                    advanceToNextPendingStop(stop.id)
                                 }
                             },
                             onFailed = {
@@ -423,7 +478,7 @@ fun RouteDetailScreen(
                                     }
                                     statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
                                     pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
-                                    clearStopSelection()
+                                    advanceToNextPendingStop(stop.id)
                                 }
                             },
                             onUndoStatus = {
@@ -458,15 +513,19 @@ fun RouteDetailScreen(
                             },
                             onRouteAffectingStopUpdate = ::updateRouteAffectingStop,
                             onOptimize = {
-                                val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
-                                persist(
-                                    currentRoute.copy(
-                                        stops = optimized,
-                                        optimizedAtMillis = System.currentTimeMillis(),
-                                    ),
-                                )
-                                pendingRouteChangeOriginalStops = emptyMap()
-                                showApplyRouteChangesDialog = false
+                                val optimizeStartPoint = currentRoute.startLocation ?: currentLocation
+                                if (optimizeStartPoint != null) {
+                                    val optimized = RouteOptimizer.optimize(currentRoute.stops, optimizeStartPoint)
+                                    persist(
+                                        currentRoute.copy(
+                                            startLocation = currentRoute.startLocation ?: optimizeStartPoint,
+                                            stops = optimized,
+                                            optimizedAtMillis = System.currentTimeMillis(),
+                                        ),
+                                    )
+                                    pendingRouteChangeOriginalStops = emptyMap()
+                                    showApplyRouteChangesDialog = false
+                                }
                             },
                             onDiscardRouteChanges = ::discardPendingRouteChanges,
                             onShowApplyRouteChanges = { showApplyRouteChangesDialog = true },
@@ -489,7 +548,7 @@ fun RouteDetailScreen(
                 ) { innerPadding ->
                     RouteMapView(
                         currentLocation = currentLocation,
-                        startLocation = currentRoute.startLocation,
+                        startLocation = currentRoute.startLocation ?: currentLocation,
                         stops = orderedStops,
                         activeStopId = activeStop?.id,
                         drawRoutePath = orderedStops.size > 1,
@@ -534,17 +593,21 @@ fun RouteDetailScreen(
                         confirmButton = {
                             TextButton(
                                 onClick = {
-                                    val optimized = RouteOptimizer.optimize(currentRoute.stops, startPoint)
-                                    persist(
-                                        currentRoute.copy(
-                                            stops = optimized,
-                                            optimizedAtMillis = System.currentTimeMillis(),
-                                        ),
-                                    )
-                                    pendingRouteChangeOriginalStops = emptyMap()
-                                    showApplyRouteChangesDialog = false
-                                    selectedStopId = null
-                                    editingStopId = null
+                                    val optimizeStartPoint = currentRoute.startLocation ?: currentLocation
+                                    if (optimizeStartPoint != null) {
+                                        val optimized = RouteOptimizer.optimize(currentRoute.stops, optimizeStartPoint)
+                                        persist(
+                                            currentRoute.copy(
+                                                startLocation = currentRoute.startLocation ?: optimizeStartPoint,
+                                                stops = optimized,
+                                                optimizedAtMillis = System.currentTimeMillis(),
+                                            ),
+                                        )
+                                        pendingRouteChangeOriginalStops = emptyMap()
+                                        showApplyRouteChangesDialog = false
+                                        selectedStopId = null
+                                        editingStopId = null
+                                    }
                                 },
                             ) {
                                 Text("Volver a optimizar")
@@ -745,7 +808,7 @@ private fun RouteWorkSheet(
                         onFailed = onFailed,
                         onEdit = { onEditStop(activeStop.id) },
                         onDelete = { onDeleteStop(activeStop) },
-                        onClose = if (isStopFocused) onCloseResolvedStop else null,
+                        onClose = onCloseResolvedStop,
                     )
                 }
 
