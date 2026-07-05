@@ -28,6 +28,25 @@ import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
 import com.example.ruts.routing.OsrmRouteClient
 import com.example.ruts.ui.theme.pendingMarkerArgb
+import org.maplibre.android.MapLibre
+import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.MarkerOptions as MapLibreMarkerOptions
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.Style
+import org.maplibre.android.maps.MapView as VectorMapView
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory.lineCap
+import org.maplibre.android.style.layers.PropertyFactory.lineColor
+import org.maplibre.android.style.layers.PropertyFactory.lineJoin
+import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.Point
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
@@ -59,9 +78,52 @@ private const val OVERVIEW_ZOOM = 15.0
 // ~65% opacity — lets street labels show through like Google Maps navigation
 private const val ROUTE_LINE_COLOR = 0xA64285F4.toInt()
 private const val ROUTE_LINE_WIDTH = 13f
+private const val USE_VECTOR_MAP_EXPERIMENT = true
+private const val VECTOR_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron"
+private const val VECTOR_ROUTE_SOURCE_ID = "ruts-route-source"
+private const val VECTOR_ROUTE_LAYER_ID = "ruts-route-layer"
 
 @Composable
 fun RouteMapView(
+    currentLocation: GeoPoint?,
+    startLocation: GeoPoint?,
+    stops: List<DeliveryStop>,
+    activeStopId: String?,
+    modifier: Modifier = Modifier,
+    drawRoutePath: Boolean = false,
+    roundTrip: Boolean = true,
+    onStopClick: ((String) -> Unit)? = null,
+    focusPoint: GeoPoint? = null,
+) {
+    if (USE_VECTOR_MAP_EXPERIMENT && drawRoutePath) {
+        VectorRouteMapView(
+            currentLocation = currentLocation,
+            startLocation = startLocation,
+            stops = stops,
+            activeStopId = activeStopId,
+            modifier = modifier,
+            drawRoutePath = drawRoutePath,
+            roundTrip = roundTrip,
+            onStopClick = onStopClick,
+            focusPoint = focusPoint,
+        )
+    } else {
+        OsmdroidRouteMapView(
+            currentLocation = currentLocation,
+            startLocation = startLocation,
+            stops = stops,
+            activeStopId = activeStopId,
+            modifier = modifier,
+            drawRoutePath = drawRoutePath,
+            roundTrip = roundTrip,
+            onStopClick = onStopClick,
+            focusPoint = focusPoint,
+        )
+    }
+}
+
+@Composable
+private fun OsmdroidRouteMapView(
     currentLocation: GeoPoint?,
     startLocation: GeoPoint?,
     stops: List<DeliveryStop>,
@@ -302,6 +364,317 @@ fun RouteMapView(
     }
 }
 
+@Composable
+private fun VectorRouteMapView(
+    currentLocation: GeoPoint?,
+    startLocation: GeoPoint?,
+    stops: List<DeliveryStop>,
+    activeStopId: String?,
+    modifier: Modifier = Modifier,
+    drawRoutePath: Boolean = false,
+    roundTrip: Boolean = true,
+    onStopClick: ((String) -> Unit)? = null,
+    focusPoint: GeoPoint? = null,
+) {
+    val context = LocalContext.current
+    var vectorMapView by remember { mutableStateOf<VectorMapView?>(null) }
+    var vectorMap by remember { mutableStateOf<MapLibreMap?>(null) }
+    var isStyleReady by remember { mutableStateOf(false) }
+    val osrmUserAgent = remember { "${context.packageName}/1.0 (Android)" }
+
+    remember {
+        MapLibre.getInstance(context.applicationContext)
+    }
+
+    val routeWaypoints = remember(drawRoutePath, roundTrip, startLocation, stops) {
+        if (!drawRoutePath || startLocation == null) {
+            emptyList()
+        } else {
+            buildList {
+                add(startLocation)
+                stops.sortedBy { it.orderIndex }.forEach { stop ->
+                    val location = stop.location ?: return@forEach
+                    add(location)
+                }
+                if (roundTrip && stops.isNotEmpty()) {
+                    add(startLocation)
+                }
+            }
+        }
+    }
+    val routePathSignature = remember(routeWaypoints) {
+        routeWaypoints.joinToString(separator = "|") { point ->
+            "${point.latitude},${point.longitude}"
+        }
+    }
+    var routedRoutePath by remember { mutableStateOf<List<GeoPoint>?>(null) }
+    val cameraSignature = remember(stops, activeStopId, startLocation, focusPoint) {
+        buildString {
+            append("active=$activeStopId")
+            append("|focus=${focusPoint?.latitude},${focusPoint?.longitude}")
+            append("|start=${startLocation?.latitude},${startLocation?.longitude}")
+            stops.forEach { stop ->
+                append("|${stop.id}:${stop.location?.latitude},${stop.location?.longitude}")
+            }
+        }
+    }
+
+    LaunchedEffect(routePathSignature, osrmUserAgent) {
+        routedRoutePath = null
+        if (routeWaypoints.size >= 2) {
+            routedRoutePath = OsrmRouteClient.fetchRouteGeometry(
+                waypoints = routeWaypoints,
+                userAgent = osrmUserAgent,
+            )
+        }
+    }
+
+    val renderSignature = remember(
+        currentLocation,
+        startLocation,
+        stops,
+        activeStopId,
+        focusPoint,
+        routedRoutePath,
+    ) {
+        buildString {
+            append("active=$activeStopId")
+            append("|focus=${focusPoint?.latitude},${focusPoint?.longitude}")
+            append("|current=${currentLocation?.latitude},${currentLocation?.longitude}")
+            append("|start=${startLocation?.latitude},${startLocation?.longitude}")
+            stops.forEach { stop ->
+                append("|${stop.id}:${stop.location?.latitude},${stop.location?.longitude}:${stop.status}:${stop.stopType}:${stop.orderPreference}")
+            }
+            routedRoutePath?.forEach { point ->
+                append("|route=${point.latitude},${point.longitude}")
+            }
+        }
+    }
+
+    LaunchedEffect(renderSignature, vectorMap, isStyleReady) {
+        val map = vectorMap ?: return@LaunchedEffect
+        if (!isStyleReady) return@LaunchedEffect
+
+        renderVectorRouteMap(
+            map = map,
+            context = context,
+            currentLocation = currentLocation,
+            startLocation = startLocation,
+            stops = stops,
+            activeStopId = activeStopId,
+            focusPoint = focusPoint,
+            routePath = routedRoutePath ?: routeWaypoints,
+            onStopClick = onStopClick,
+        )
+    }
+
+    LaunchedEffect(cameraSignature, vectorMap, isStyleReady) {
+        val map = vectorMap ?: return@LaunchedEffect
+        if (!isStyleReady) return@LaunchedEffect
+
+        focusVectorCamera(
+            map = map,
+            activePoint = stops.firstOrNull { it.id == activeStopId }?.location ?: focusPoint,
+            points = buildList {
+                startLocation?.let { add(it) }
+                addAll(stops.mapNotNull { it.location })
+            },
+        )
+    }
+
+    DisposableEffect(vectorMapView) {
+        vectorMapView?.onStart()
+        vectorMapView?.onResume()
+        onDispose {
+            vectorMapView?.onPause()
+            vectorMapView?.onStop()
+        }
+    }
+
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { ctx ->
+            MapLibre.getInstance(ctx.applicationContext)
+            VectorMapView(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                onCreate(null)
+                getMapAsync { map ->
+                    vectorMap = map
+                    map.setStyle(VECTOR_MAP_STYLE_URL) {
+                        isStyleReady = true
+                    }
+                }
+            }.also { created -> vectorMapView = created }
+        },
+        onRelease = { map ->
+            map.onPause()
+            map.onStop()
+            map.onDestroy()
+            if (vectorMapView == map) {
+                vectorMapView = null
+                vectorMap = null
+                isStyleReady = false
+            }
+        },
+    )
+}
+
+private fun renderVectorRouteMap(
+    map: MapLibreMap,
+    context: android.content.Context,
+    currentLocation: GeoPoint?,
+    startLocation: GeoPoint?,
+    stops: List<DeliveryStop>,
+    activeStopId: String?,
+    focusPoint: GeoPoint?,
+    routePath: List<GeoPoint>,
+    onStopClick: ((String) -> Unit)?,
+) {
+    val iconFactory = IconFactory.getInstance(context)
+
+    map.clear()
+    map.setOnMarkerClickListener { marker ->
+        marker.snippet?.let { stopId ->
+            onStopClick?.invoke(stopId)
+            true
+        } ?: false
+    }
+
+    val routePoints = routePath.map { point -> point.toLatLng() }
+    map.getStyle { style ->
+        upsertVectorRouteLine(style, routePoints)
+    }
+
+    startLocation?.let { location ->
+        map.addMarker(
+            MapLibreMarkerOptions()
+                .position(location.toLatLng())
+                .title("Inicio de ruta"),
+        )
+    }
+
+    stops.sortedBy { it.orderIndex }.forEachIndexed { index, stop ->
+        val location = stop.location ?: return@forEachIndexed
+        val markerDrawable = createNumberedMarkerDrawable(
+            resources = context.resources,
+            number = index + 1,
+            isActive = stop.id == activeStopId,
+            status = stop.status,
+            stopType = stop.stopType,
+            orderPreference = stop.orderPreference,
+            useBlueHighlight = true,
+        )
+
+        map.addMarker(
+            MapLibreMarkerOptions()
+                .position(location.toLatLng())
+                .title("Parada ${index + 1}: ${stop.address}")
+                .snippet(stop.id)
+                .icon(iconFactory.fromBitmap(markerDrawable.bitmap)),
+        )
+    }
+
+    currentLocation?.let { location ->
+        val currentLocationDrawable = createCurrentLocationMarkerDrawable(context.resources)
+        map.addMarker(
+            MapLibreMarkerOptions()
+                .position(location.toLatLng())
+                .title("Tu ubicación")
+                .icon(iconFactory.fromBitmap(currentLocationDrawable.bitmap)),
+        )
+    }
+}
+
+private fun upsertVectorRouteLine(
+    style: Style,
+    routePoints: List<LatLng>,
+) {
+    if (routePoints.size < 2) {
+        style.getLayerOrNull(VECTOR_ROUTE_LAYER_ID)?.let { style.removeLayer(it) }
+        style.getSourceOrNull(VECTOR_ROUTE_SOURCE_ID)?.let { style.removeSource(it) }
+        return
+    }
+
+    val routeGeometry = LineString.fromLngLats(
+        routePoints.map { point -> Point.fromLngLat(point.longitude, point.latitude) },
+    )
+    val existingSource = style.getSourceOrNull(VECTOR_ROUTE_SOURCE_ID) as? GeoJsonSource
+    if (existingSource != null) {
+        existingSource.setGeoJson(Feature.fromGeometry(routeGeometry))
+    } else {
+        style.addSource(
+            GeoJsonSource(
+                VECTOR_ROUTE_SOURCE_ID,
+                Feature.fromGeometry(routeGeometry),
+            ),
+        )
+    }
+
+    if (style.getLayerOrNull(VECTOR_ROUTE_LAYER_ID) != null) return
+
+    val routeLayer = LineLayer(VECTOR_ROUTE_LAYER_ID, VECTOR_ROUTE_SOURCE_ID)
+        .withProperties(
+            lineColor(ROUTE_LINE_COLOR),
+            lineWidth(ROUTE_LINE_WIDTH),
+            lineCap(Property.LINE_CAP_ROUND),
+            lineJoin(Property.LINE_JOIN_ROUND),
+        )
+    val firstLabelLayerId = style.getLayers()
+        .firstOrNull { layer -> layer.getId().contains("label", ignoreCase = true) }
+        ?.getId()
+
+    if (firstLabelLayerId != null) {
+        style.addLayerBelow(routeLayer, firstLabelLayerId)
+    } else {
+        style.addLayer(routeLayer)
+    }
+}
+
+private fun Style.getLayerOrNull(layerId: String) = try {
+    getLayer(layerId)
+} catch (_: RuntimeException) {
+    null
+}
+
+private fun Style.getSourceOrNull(sourceId: String) = try {
+    getSource(sourceId)
+} catch (_: RuntimeException) {
+    null
+}
+
+private fun focusVectorCamera(
+    map: MapLibreMap,
+    activePoint: GeoPoint?,
+    points: List<GeoPoint>,
+) {
+    if (activePoint != null) {
+        map.animateCamera(
+            CameraUpdateFactory.newLatLngZoom(activePoint.toLatLng(), ACTIVE_STOP_ZOOM),
+        )
+        return
+    }
+
+    if (points.isEmpty()) return
+
+    if (points.size == 1) {
+        map.moveCamera(
+            CameraUpdateFactory.newLatLngZoom(points.first().toLatLng(), OVERVIEW_ZOOM),
+        )
+        return
+    }
+
+    val boundsBuilder = LatLngBounds.Builder()
+    points.forEach { point -> boundsBuilder.include(point.toLatLng()) }
+    map.moveCamera(
+        CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 96),
+    )
+}
+
+private fun GeoPoint.toLatLng(): LatLng = LatLng(latitude, longitude)
+
 private fun createCurrentLocationMarkerDrawable(
     resources: android.content.res.Resources,
 ): BitmapDrawable {
@@ -348,7 +721,7 @@ private fun createNumberedMarkerDrawable(
     }
     val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = when {
-            status == StopStatus.Pending && !isActive -> Color.BLACK
+            status == StopStatus.Pending && !isActive && stopType == StopType.Delivery -> Color.BLACK
             else -> Color.WHITE
         }
         textAlign = Paint.Align.CENTER
@@ -362,7 +735,7 @@ private fun createNumberedMarkerDrawable(
     }
 
     canvas.drawCircle(size / 2f, size / 2.4f, 34f, fill)
-    if (isActive || status != StopStatus.Pending) {
+    if (isActive || status != StopStatus.Pending || stopType == StopType.Pickup) {
         canvas.drawCircle(size / 2f, size / 2.4f, 34f, stroke)
     }
     val markerLabel = if (status == StopStatus.Failed) "X" else number.toString()

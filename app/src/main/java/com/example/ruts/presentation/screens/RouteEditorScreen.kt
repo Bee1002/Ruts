@@ -407,6 +407,14 @@ fun RouteEditorScreen(
         scope.launch { sheetState.bottomSheetState.expand() }
     }
 
+    fun selectStopFromMap(stopId: String) {
+        selectedStopId = stopId
+        searchExpanded = false
+        searchQuery = ""
+        searchResults = emptyList()
+        scope.launch { sheetState.bottomSheetState.expand() }
+    }
+
     if (currentRoute == null) {
         Column(
             modifier = Modifier
@@ -597,6 +605,7 @@ fun RouteEditorScreen(
                     activeStopId = highlightedStopId,
                     drawRoutePath = currentRoute.stops.size > 1 &&
                         (currentRoute.startLocation ?: currentLocation) != null,
+                    onStopClick = ::selectStopFromMap,
                     modifier = Modifier.fillMaxSize(),
                 )
 

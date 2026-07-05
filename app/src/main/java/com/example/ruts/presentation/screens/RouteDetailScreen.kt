@@ -66,6 +66,7 @@ import com.example.ruts.domain.displayLabel
 import com.example.ruts.domain.formatTime
 import com.example.ruts.domain.RouteEstimator
 import com.example.ruts.domain.routeDisplayTitle
+import com.example.ruts.domain.nextPendingStopAfter
 import com.example.ruts.geocoding.GeocodingHelper
 import com.example.ruts.location.LocationHelper
 import com.example.ruts.maps.MapsNavigator
@@ -177,9 +178,11 @@ fun RouteDetailScreen(
         }
     }
 
-    fun updateStops(transform: (List<DeliveryStop>) -> List<DeliveryStop>) {
-        val currentRoute = route ?: return
-        persist(currentRoute.copy(stops = transform(currentRoute.stops).reindexStops()))
+    fun updateStops(transform: (List<DeliveryStop>) -> List<DeliveryStop>): Route? {
+        val currentRoute = route ?: return null
+        val updatedRoute = currentRoute.copy(stops = transform(currentRoute.stops).reindexStops())
+        persist(updatedRoute)
+        return updatedRoute
     }
 
     fun updateRouteAffectingStop(stopId: String, transform: (DeliveryStop) -> DeliveryStop) {
@@ -350,12 +353,11 @@ fun RouteDetailScreen(
                     useCompactSheetPeek = false
                 }
 
-                fun advanceToNextPendingStop(afterStopId: String) {
-                    val ordered = route?.stops?.sortedBy { it.orderIndex }.orEmpty()
-                    val afterIndex = ordered.firstOrNull { it.id == afterStopId }?.orderIndex ?: Int.MAX_VALUE
-                    val nextStop = ordered.firstOrNull { stop ->
-                        stop.status == StopStatus.Pending && stop.orderIndex > afterIndex
-                    } ?: ordered.firstOrNull { it.status == StopStatus.Pending }
+                fun advanceToNextPendingStop(
+                    afterStopId: String,
+                    stopsSnapshot: List<DeliveryStop> = route?.stops.orEmpty(),
+                ) {
+                    val nextStop = nextPendingStopAfter(stopsSnapshot, afterStopId)
                     if (nextStop != null) {
                         focusPendingStop(nextStop.id)
                     } else {
@@ -456,19 +458,19 @@ fun RouteDetailScreen(
                             },
                             onDelivered = {
                                 activeStop?.let { stop ->
-                                    updateStops { stops ->
+                                    val updatedRoute = updateStops { stops ->
                                         stops.updateStop(stop.id) {
                                             it.copy(status = StopStatus.Delivered, failureReason = "")
                                         }
                                     }
                                     statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
                                     pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
-                                    advanceToNextPendingStop(stop.id)
+                                    advanceToNextPendingStop(stop.id, updatedRoute?.stops.orEmpty())
                                 }
                             },
                             onFailed = {
                                 activeStop?.let { stop ->
-                                    updateStops { stops ->
+                                    val updatedRoute = updateStops { stops ->
                                         stops.updateStop(stop.id) {
                                             it.copy(
                                                 status = StopStatus.Failed,
@@ -478,7 +480,7 @@ fun RouteDetailScreen(
                                     }
                                     statusChangedAtMillis = statusChangedAtMillis + (stop.id to System.currentTimeMillis())
                                     pendingRouteChangeOriginalStops = pendingRouteChangeOriginalStops - stop.id
-                                    advanceToNextPendingStop(stop.id)
+                                    advanceToNextPendingStop(stop.id, updatedRoute?.stops.orEmpty())
                                 }
                             },
                             onUndoStatus = {
