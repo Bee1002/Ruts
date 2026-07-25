@@ -14,10 +14,9 @@ android {
     defaultConfig {
         applicationId = "com.rutsgo.app"
         minSdk = 26
+        // targetSdk only accepts major API level (no minorApiLevel; that is compileSdk-only).
         targetSdk {
-            version = release(36) {
-                minorApiLevel = 1
-            }
+            version = release(36)
         }
         versionCode = 2
         versionName = "1.0.1"
