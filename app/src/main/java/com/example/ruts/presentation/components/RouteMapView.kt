@@ -210,16 +210,26 @@ private fun OsmdroidRouteMapView(
 
     LaunchedEffect(cameraSignature, mapView) {
         val map = mapView ?: return@LaunchedEffect
-        val deselectedStop = previousActiveStopId != null && activeStopId == null
+        val previousActive = previousActiveStopId
+        val deselectedStop = previousActive != null && activeStopId == null
         previousActiveStopId = activeStopId
 
         val activeStop = stops.firstOrNull { it.id == activeStopId }
         val activePoint = activeStop?.location ?: focusPoint
 
         if (activePoint != null) {
-            // Pan only: keep the user's current zoom while editing nearby stops.
             val target = OsmGeoPoint(activePoint.latitude, activePoint.longitude)
-            map.controller.animateTo(target)
+            when {
+                previousActive == null -> {
+                    // First focus (e.g. after confirming optimization): zoom to the stop.
+                    map.controller.setCenter(target)
+                    map.controller.setZoom(OVERVIEW_ZOOM)
+                }
+                previousActive != activeStopId -> {
+                    // Switching between stops: pan only to preserve the user's zoom.
+                    map.controller.animateTo(target)
+                }
+            }
             return@LaunchedEffect
         }
 
@@ -486,12 +496,15 @@ private fun VectorRouteMapView(
         val map = vectorMap ?: return@LaunchedEffect
         if (!isStyleReady) return@LaunchedEffect
 
-        val deselectedStop = previousActiveStopId != null && activeStopId == null
+        val previousActive = previousActiveStopId
+        val deselectedStop = previousActive != null && activeStopId == null
         previousActiveStopId = activeStopId
 
         focusVectorCamera(
             map = map,
             activePoint = stops.firstOrNull { it.id == activeStopId }?.location ?: focusPoint,
+            activeStopId = activeStopId,
+            previousActiveStopId = previousActive,
             points = buildList {
                 startLocation?.let { add(it) }
                 addAll(stops.mapNotNull { it.location })
@@ -665,14 +678,26 @@ private fun Style.getSourceOrNull(sourceId: String) = try {
 private fun focusVectorCamera(
     map: MapLibreMap,
     activePoint: GeoPoint?,
+    activeStopId: String?,
+    previousActiveStopId: String?,
     points: List<GeoPoint>,
     preserveZoom: Boolean = false,
 ) {
     if (activePoint != null) {
-        // Pan only: keep the user's current zoom while editing nearby stops.
-        map.animateCamera(
-            CameraUpdateFactory.newLatLng(activePoint.toLatLng()),
-        )
+        when {
+            previousActiveStopId == null -> {
+                // First focus (e.g. after confirming optimization): zoom to the stop.
+                map.moveCamera(
+                    CameraUpdateFactory.newLatLngZoom(activePoint.toLatLng(), OVERVIEW_ZOOM),
+                )
+            }
+            previousActiveStopId != activeStopId -> {
+                // Switching between stops: pan only to preserve the user's zoom.
+                map.animateCamera(
+                    CameraUpdateFactory.newLatLng(activePoint.toLatLng()),
+                )
+            }
+        }
         return
     }
 
