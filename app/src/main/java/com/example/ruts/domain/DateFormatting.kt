@@ -16,24 +16,6 @@ fun formatTime(millis: Long): String {
     return SimpleDateFormat("H:mm", SpanishLocale).format(Date(millis))
 }
 
-fun formatFullDate(millis: Long): String {
-    return SimpleDateFormat("d 'de' MMMM 'de' yyyy", SpanishLocale).format(Date(millis))
-}
-
-fun formatShortRouteLabel(millis: Long): String {
-    return "${formatWeekday(millis)} · ${formatFullDate(millis)}"
-}
-
-fun formatCompactRouteDate(millis: Long): String {
-    val day = SimpleDateFormat("d", SpanishLocale).format(Date(millis))
-    val month = SimpleDateFormat("MMM", SpanishLocale).format(Date(millis)).lowercase(SpanishLocale)
-    return "$day-$month."
-}
-
-fun formatWeekdayLowercase(millis: Long): String {
-    return formatWeekday(millis).lowercase(SpanishLocale)
-}
-
 fun formatDrawerRoutePrefix(millis: Long): String {
     val day = SimpleDateFormat("d", SpanishLocale).format(Date(millis))
     val month = SimpleDateFormat("MMM", SpanishLocale).format(Date(millis))
