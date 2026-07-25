@@ -2,7 +2,6 @@ package com.example.ruts
 
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.Route
-import com.example.ruts.domain.formatWeekdayLowercase
 import com.example.ruts.domain.normalizeSpokenAddress
 import com.example.ruts.domain.resolveNextRouteName
 import com.example.ruts.domain.resolveStoredRouteName
@@ -219,29 +218,64 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun suggestRouteNameForCreationUsesWeekdayAndSuffix() {
+    fun suggestRouteNameForCreationUsesDayLabelAndSuffix() {
         val cal = java.util.Calendar.getInstance()
-        cal.set(2026, java.util.Calendar.JUNE, 22, 12, 0, 0)
+        cal.set(2026, java.util.Calendar.JULY, 25, 12, 0, 0)
         cal.set(java.util.Calendar.MILLISECOND, 0)
         val dayMillis = cal.timeInMillis
-        val weekday = formatWeekdayLowercase(dayMillis)
+        val dayLabel = com.example.ruts.domain.formatDrawerRoutePrefix(dayMillis)
         val first = Route(createdAtMillis = dayMillis, name = "")
-        assertEquals(weekday, suggestRouteNameForCreation(dayMillis, listOf()))
-        assertEquals("$weekday Ruta 2", suggestRouteNameForCreation(dayMillis, listOf(first)))
+        assertEquals(dayLabel, suggestRouteNameForCreation(dayMillis, listOf()))
+        assertEquals("$dayLabel Ruta 2", suggestRouteNameForCreation(dayMillis, listOf(first)))
     }
 
     @Test
     fun resolveStoredRouteNameMapsSuggestedInputToInternalSuffix() {
         val cal = java.util.Calendar.getInstance()
-        cal.set(2026, java.util.Calendar.JUNE, 22, 12, 0, 0)
+        cal.set(2026, java.util.Calendar.JULY, 25, 12, 0, 0)
         cal.set(java.util.Calendar.MILLISECOND, 0)
         val dayMillis = cal.timeInMillis
-        val weekday = formatWeekdayLowercase(dayMillis)
+        val dayLabel = com.example.ruts.domain.formatDrawerRoutePrefix(dayMillis)
         val first = Route(createdAtMillis = dayMillis, name = "")
         val existing = listOf(first)
-        assertEquals("Ruta 2", resolveStoredRouteName("$weekday Ruta 2", dayMillis, existing))
-        assertEquals("", resolveStoredRouteName(weekday, dayMillis, listOf()))
+        assertEquals("Ruta 2", resolveStoredRouteName("$dayLabel Ruta 2", dayMillis, existing))
+        assertEquals("", resolveStoredRouteName(dayLabel, dayMillis, listOf()))
         assertEquals("Entrega VIP", resolveStoredRouteName("Entrega VIP", dayMillis, existing))
+    }
+
+    @Test
+    fun routeNamesResetCounterOnDifferentDays() {
+        val saturdayJuly25 = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.JULY, 25, 12, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val saturdayAugust1 = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.AUGUST, 1, 12, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val julyLabel = com.example.ruts.domain.formatDrawerRoutePrefix(saturdayJuly25)
+        val augustLabel = com.example.ruts.domain.formatDrawerRoutePrefix(saturdayAugust1)
+
+        assertEquals(julyLabel, suggestRouteNameForCreation(saturdayJuly25, listOf()))
+        assertEquals(
+            "$julyLabel Ruta 3",
+            suggestRouteNameForCreation(
+                saturdayJuly25,
+                listOf(
+                    Route(createdAtMillis = saturdayJuly25, name = ""),
+                    Route(createdAtMillis = saturdayJuly25, name = "Ruta 2"),
+                ),
+            ),
+        )
+        assertEquals(augustLabel, suggestRouteNameForCreation(saturdayAugust1, listOf()))
+        assertEquals(
+            "$augustLabel Ruta 2",
+            suggestRouteNameForCreation(
+                saturdayAugust1,
+                listOf(Route(createdAtMillis = saturdayAugust1, name = "")),
+            ),
+        )
     }
 
     @Test

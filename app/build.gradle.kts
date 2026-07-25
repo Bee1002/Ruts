@@ -14,7 +14,11 @@ android {
     defaultConfig {
         applicationId = "com.rutsgo.app"
         minSdk = 26
-        targetSdk = 36
+        targetSdk {
+            version = release(36) {
+                minorApiLevel = 1
+            }
+        }
         versionCode = 2
         versionName = "1.0.1"
 

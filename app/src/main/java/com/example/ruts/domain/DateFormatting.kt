@@ -35,7 +35,12 @@ fun formatWeekdayLowercase(millis: Long): String {
 }
 
 fun formatDrawerRoutePrefix(millis: Long): String {
-    return "${formatCompactRouteDate(millis)} ${formatWeekdayLowercase(millis)}"
+    val day = SimpleDateFormat("d", SpanishLocale).format(Date(millis))
+    val month = SimpleDateFormat("MMM", SpanishLocale).format(Date(millis))
+        .trimEnd('.')
+        .replaceFirstChar { if (it.isLowerCase()) it.titlecase(SpanishLocale) else it.toString() }
+    val weekday = formatWeekday(millis)
+    return "$day-$month.$weekday"
 }
 
 fun isSameDay(firstMillis: Long, secondMillis: Long): Boolean {
