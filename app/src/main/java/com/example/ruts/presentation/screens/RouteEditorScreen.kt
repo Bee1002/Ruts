@@ -19,7 +19,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import com.example.ruts.ui.theme.AccentBlue
 import com.example.ruts.ui.theme.White
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -82,6 +84,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.time.Duration.Companion.milliseconds
 
 private enum class OptimizationUiState {
     Idle,
@@ -99,8 +102,10 @@ fun RouteEditorScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val configuration = LocalConfiguration.current
-    val collapsedPeek = (configuration.screenHeightDp * 0.58f).dp
+    val density = LocalDensity.current
+    val collapsedPeek = with(density) {
+        LocalWindowInfo.current.containerSize.height.toDp() * 0.58f
+    }
     val sheetState = rememberBottomSheetScaffoldState()
     val geocodingHelper = remember { GeocodingHelper(context) }
     val locationHelper = remember { LocationHelper(context) }
@@ -191,7 +196,7 @@ fun RouteEditorScreen(
 
         isSearching = true
         searchJob = scope.launch {
-            delay(400)
+            delay(400.milliseconds)
             searchResults = geocodingHelper.search(searchQuery, searchBias)
             isSearching = false
         }
@@ -347,7 +352,7 @@ fun RouteEditorScreen(
             val optimizedDeferred = async {
                 RouteOptimizer.optimize(routeToOptimize.stops, startPoint)
             }
-            delay(2500)
+            delay(2500.milliseconds)
             val optimizedStops = optimizedDeferred.await()
             val updatedRoute = routeToOptimize.copy(
                 stops = optimizedStops,

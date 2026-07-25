@@ -45,9 +45,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import android.Manifest
 import android.app.Activity
 import android.view.WindowManager
@@ -80,7 +81,6 @@ import com.example.ruts.presentation.components.RouteMapView
 import com.example.ruts.domain.formatDistanceKm
 import com.example.ruts.presentation.components.RoutesDrawerContent
 import com.example.ruts.presentation.components.StopDetailEditor
-import com.example.ruts.ui.theme.Error
 import com.example.ruts.ui.theme.stopAccentColor
 import kotlinx.coroutines.launch
 
@@ -102,17 +102,17 @@ fun RouteDetailScreen(
     val geocodingHelper = remember { GeocodingHelper(context) }
     val locationHelper = remember { LocationHelper(context) }
 
-    var route by remember { mutableStateOf<Route?>(null) }
-    var currentLocation by remember { mutableStateOf<GeoPoint?>(null) }
+    var route: Route? by remember { mutableStateOf(null) }
+    var currentLocation: GeoPoint? by remember { mutableStateOf(null) }
     var hasLocationPermission by remember { mutableStateOf(false) }
     var allRoutes by remember { mutableStateOf(emptyList<Route>()) }
-    var selectedStopId by remember { mutableStateOf<String?>(null) }
+    var selectedStopId: String? by remember { mutableStateOf(null) }
     var statusChangedAtMillis by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var editingStopId by remember { mutableStateOf<String?>(null) }
+    var editingStopId: String? by remember { mutableStateOf(null) }
     var showRouteCompleted by remember { mutableStateOf(false) }
     var showRouteSummary by remember { mutableStateOf(false) }
-    var routeCompletedAtMillis by remember { mutableStateOf<Long?>(null) }
-    var startAddress by remember { mutableStateOf<String?>(null) }
+    var routeCompletedAtMillis: Long? by remember { mutableStateOf(null) }
+    var startAddress: String? by remember { mutableStateOf(null) }
     var pendingRouteChangeOriginalStops by remember { mutableStateOf<Map<String, DeliveryStop>>(emptyMap()) }
     var showApplyRouteChangesDialog by remember { mutableStateOf(false) }
     var useCompactSheetPeek by remember { mutableStateOf(false) }
@@ -396,14 +396,17 @@ fun RouteDetailScreen(
                     }
                 }
 
-                val configuration = LocalConfiguration.current
+                val density = LocalDensity.current
+                val screenHeight = with(density) {
+                    LocalWindowInfo.current.containerSize.height.toDp()
+                }
                 val focusedStopForPeek = orderedStops.firstOrNull { it.id == selectedStopId }
                 val compactPeekFraction = if (focusedStopForPeek?.notes?.isNotBlank() == true) {
                     0.33f
                 } else {
                     0.28f
                 }
-                val compactSheetPeek = (configuration.screenHeightDp * compactPeekFraction).dp
+                val compactSheetPeek = screenHeight * compactPeekFraction
                 val sheetPeekHeight = if (useCompactSheetPeek && selectedStopId != null) {
                     compactSheetPeek
                 } else {

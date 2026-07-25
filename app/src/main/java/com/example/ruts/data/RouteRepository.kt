@@ -1,6 +1,7 @@
 package com.example.ruts.data
 
 import android.content.Context
+import androidx.core.content.edit
 import com.example.ruts.domain.DEFAULT_SERVICE_MINUTES
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
@@ -95,13 +96,13 @@ class RouteRepository(context: Context) {
     private fun persistNoteWords(words: List<String>) {
         val payload = JSONArray()
         words.forEach { word -> payload.put(word) }
-        preferences.edit()
-            .putString(NoteWordsKey, payload.toString())
-            .apply()
+        preferences.edit {
+            putString(NoteWordsKey, payload.toString())
+        }
     }
 
     fun setLastRouteId(routeId: String) {
-        preferences.edit().putString(LastRouteKey, routeId).apply()
+        preferences.edit { putString(LastRouteKey, routeId) }
     }
 
     fun deleteRoute(routeId: String) {
@@ -109,9 +110,9 @@ class RouteRepository(context: Context) {
         persistRoutes(routes)
 
         if (preferences.getString(LastRouteKey, null) == routeId) {
-            preferences.edit()
-                .putString(LastRouteKey, routes.firstOrNull()?.id)
-                .apply()
+            preferences.edit {
+                putString(LastRouteKey, routes.firstOrNull()?.id)
+            }
         }
     }
 
@@ -127,34 +128,13 @@ class RouteRepository(context: Context) {
         return route
     }
 
-    fun duplicateRouteWithStops(source: Route, createdAtMillis: Long = System.currentTimeMillis()): Route {
-        val copiedStops = source.stops
-            .sortedBy { it.orderIndex }
-            .mapIndexed { index, stop ->
-                stop.copy(
-                    id = java.util.UUID.randomUUID().toString(),
-                    orderIndex = index,
-                    status = StopStatus.Pending,
-                    failureReason = "",
-                )
-            }
-
-        val route = Route(
-            createdAtMillis = createdAtMillis,
-            startLocation = source.startLocation,
-            stops = copiedStops,
-        )
-        saveRoute(route)
-        return route
-    }
-
     private fun persistRoutes(routes: List<Route>) {
         val payload = JSONArray()
         routes.forEach { route -> payload.put(route.toJson()) }
 
-        preferences.edit()
-            .putString(RoutesKey, payload.toString())
-            .apply()
+        preferences.edit {
+            putString(RoutesKey, payload.toString())
+        }
     }
 
     private fun Route.toJson(): JSONObject = JSONObject()

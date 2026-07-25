@@ -2,7 +2,6 @@ package com.example.ruts
 
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.Route
-import com.example.ruts.domain.displayLabel
 import com.example.ruts.domain.formatWeekdayLowercase
 import com.example.ruts.domain.normalizeSpokenAddress
 import com.example.ruts.domain.resolveNextRouteName

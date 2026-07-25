@@ -5,7 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.view.ViewGroup
 import java.io.File
 import androidx.compose.foundation.layout.Box
@@ -20,7 +20,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.graphics.toColorInt
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.GeoPoint
 import com.example.ruts.domain.StopOrderPreference
@@ -29,8 +33,6 @@ import com.example.ruts.domain.StopType
 import com.example.ruts.routing.OsrmRouteClient
 import com.example.ruts.ui.theme.pendingMarkerArgb
 import org.maplibre.android.MapLibre
-import org.maplibre.android.annotations.IconFactory
-import org.maplibre.android.annotations.MarkerOptions as MapLibreMarkerOptions
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
@@ -72,6 +74,9 @@ private val MinimalStreetTileSource = XYTileSource(
 )
 
 private const val MAP_BACKGROUND_COLOR = "#FAFAFA"
+private const val MARKER_BITMAP_SIZE = 96
+private const val CURRENT_LOCATION_MARKER_SIZE = 48
+private const val CURRENT_LOCATION_MARKER_COLOR = "#0A84FF"
 
 private const val OVERVIEW_ZOOM = 15.0
 // ~65% opacity — lets street labels show through like Google Maps navigation
@@ -134,6 +139,7 @@ private fun OsmdroidRouteMapView(
     focusPoint: GeoPoint? = null,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var mapView by remember { mutableStateOf<MapView?>(null) }
     val osrmUserAgent = remember { "${context.packageName}/1.0 (Android)" }
 
@@ -268,7 +274,7 @@ private fun OsmdroidRouteMapView(
                     setTileSource(MinimalStreetTileSource)
                     setMultiTouchControls(true)
                     isTilesScaledToDpi = true
-                    setBackgroundColor(Color.parseColor(MAP_BACKGROUND_COLOR))
+                    setBackgroundColor(MAP_BACKGROUND_COLOR.toColorInt())
                     minZoomLevel = 5.0
                     maxZoomLevel = 20.0
                     controller.setZoom(15.0)
@@ -336,7 +342,7 @@ private fun OsmdroidRouteMapView(
                             }
                         }
                         icon = createNumberedMarkerDrawable(
-                            resources = context.resources,
+                            resources = resources,
                             number = index + 1,
                             isActive = isActive,
                             status = stop.status,
@@ -352,7 +358,7 @@ private fun OsmdroidRouteMapView(
                     map.overlays += Marker(map).apply {
                         position = OsmGeoPoint(location.latitude, location.longitude)
                         title = "Tu ubicación"
-                        icon = createCurrentLocationMarkerDrawable(context.resources)
+                        icon = createCurrentLocationMarkerDrawable(resources)
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                 }
@@ -466,12 +472,11 @@ private fun VectorRouteMapView(
 
         renderVectorRouteMap(
             map = map,
-            context = context,
+            appContext = context.applicationContext,
             currentLocation = currentLocation,
             startLocation = startLocation,
             stops = stops,
             activeStopId = activeStopId,
-            focusPoint = focusPoint,
             routePath = routedRoutePath ?: routeWaypoints,
             onStopClick = onStopClick,
         )
@@ -535,18 +540,18 @@ private fun VectorRouteMapView(
     )
 }
 
+@Suppress("DEPRECATION")
 private fun renderVectorRouteMap(
     map: MapLibreMap,
-    context: android.content.Context,
+    appContext: android.content.Context,
     currentLocation: GeoPoint?,
     startLocation: GeoPoint?,
     stops: List<DeliveryStop>,
     activeStopId: String?,
-    focusPoint: GeoPoint?,
     routePath: List<GeoPoint>,
     onStopClick: ((String) -> Unit)?,
 ) {
-    val iconFactory = IconFactory.getInstance(context)
+    val iconFactory = org.maplibre.android.annotations.IconFactory.getInstance(appContext)
 
     map.clear()
     map.setOnMarkerClickListener { marker ->
@@ -563,7 +568,7 @@ private fun renderVectorRouteMap(
 
     startLocation?.let { location ->
         map.addMarker(
-            MapLibreMarkerOptions()
+            org.maplibre.android.annotations.MarkerOptions()
                 .position(location.toLatLng())
                 .title("Inicio de ruta"),
         )
@@ -571,8 +576,7 @@ private fun renderVectorRouteMap(
 
     stops.sortedBy { it.orderIndex }.forEachIndexed { index, stop ->
         val location = stop.location ?: return@forEachIndexed
-        val markerDrawable = createNumberedMarkerDrawable(
-            resources = context.resources,
+        val markerBitmap = createNumberedMarkerBitmap(
             number = index + 1,
             isActive = stop.id == activeStopId,
             status = stop.status,
@@ -582,21 +586,21 @@ private fun renderVectorRouteMap(
         )
 
         map.addMarker(
-            MapLibreMarkerOptions()
+            org.maplibre.android.annotations.MarkerOptions()
                 .position(location.toLatLng())
                 .title("Parada ${index + 1}: ${stop.address}")
                 .snippet(stop.id)
-                .icon(iconFactory.fromBitmap(markerDrawable.bitmap)),
+                .icon(iconFactory.fromBitmap(markerBitmap)),
         )
     }
 
     currentLocation?.let { location ->
-        val currentLocationDrawable = createCurrentLocationMarkerDrawable(context.resources)
+        val currentLocationBitmap = createCurrentLocationMarkerBitmap()
         map.addMarker(
-            MapLibreMarkerOptions()
+            org.maplibre.android.annotations.MarkerOptions()
                 .position(location.toLatLng())
                 .title("Tu ubicación")
-                .icon(iconFactory.fromBitmap(currentLocationDrawable.bitmap)),
+                .icon(iconFactory.fromBitmap(currentLocationBitmap)),
         )
     }
 }
@@ -694,27 +698,29 @@ private fun GeoPoint.toLatLng(): LatLng = LatLng(latitude, longitude)
 
 private fun createCurrentLocationMarkerDrawable(
     resources: android.content.res.Resources,
-): BitmapDrawable {
-    val size = 48
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+): Drawable = createCurrentLocationMarkerBitmap().toDrawable(resources)
+
+private const val PREFERENCE_BADGE_FIRST_COLOR = "#34C759"
+private const val PREFERENCE_BADGE_LAST_COLOR = "#FF9500"
+
+private fun createCurrentLocationMarkerBitmap(): Bitmap {
+    val size = CURRENT_LOCATION_MARKER_SIZE
+    val bitmap = createBitmap(size, size)
     val canvas = Canvas(bitmap)
     val outerRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.FILL
     }
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#0A84FF")
+        color = CURRENT_LOCATION_MARKER_COLOR.toColorInt()
         style = Paint.Style.FILL
     }
 
     canvas.drawCircle(size / 2f, size / 2f, size / 2f - 2f, outerRing)
     canvas.drawCircle(size / 2f, size / 2f, size / 2f - 8f, fill)
 
-    return BitmapDrawable(resources, bitmap)
+    return bitmap
 }
-
-private const val PREFERENCE_BADGE_FIRST_COLOR = "#34C759"
-private const val PREFERENCE_BADGE_LAST_COLOR = "#FF9500"
 
 private fun createNumberedMarkerDrawable(
     resources: android.content.res.Resources,
@@ -724,9 +730,25 @@ private fun createNumberedMarkerDrawable(
     stopType: StopType,
     orderPreference: StopOrderPreference = StopOrderPreference.Automatic,
     useBlueHighlight: Boolean = false,
-): BitmapDrawable {
-    val size = 96
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+): Drawable = createNumberedMarkerBitmap(
+    number = number,
+    isActive = isActive,
+    status = status,
+    stopType = stopType,
+    orderPreference = orderPreference,
+    useBlueHighlight = useBlueHighlight,
+).toDrawable(resources)
+
+private fun createNumberedMarkerBitmap(
+    number: Int,
+    isActive: Boolean,
+    status: StopStatus,
+    stopType: StopType,
+    orderPreference: StopOrderPreference = StopOrderPreference.Automatic,
+    useBlueHighlight: Boolean = false,
+): Bitmap {
+    val size = MARKER_BITMAP_SIZE
+    val bitmap = createBitmap(size, size)
     val canvas = Canvas(bitmap)
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = when (status) {
@@ -762,24 +784,22 @@ private fun createNumberedMarkerDrawable(
         drawOrderPreferenceBadge(
             canvas = canvas,
             orderPreference = orderPreference,
-            markerSize = size,
         )
     }
 
-    return BitmapDrawable(resources, bitmap)
+    return bitmap
 }
 
 private fun drawOrderPreferenceBadge(
     canvas: Canvas,
     orderPreference: StopOrderPreference,
-    markerSize: Int,
 ) {
     val badgeRadius = 14f
-    val centerX = markerSize - 20f
+    val centerX = MARKER_BITMAP_SIZE - 20f
     val centerY = 20f
     val fillColor = when (orderPreference) {
-        StopOrderPreference.First -> Color.parseColor(PREFERENCE_BADGE_FIRST_COLOR)
-        StopOrderPreference.Last -> Color.parseColor(PREFERENCE_BADGE_LAST_COLOR)
+        StopOrderPreference.First -> PREFERENCE_BADGE_FIRST_COLOR.toColorInt()
+        StopOrderPreference.Last -> PREFERENCE_BADGE_LAST_COLOR.toColorInt()
         StopOrderPreference.Automatic -> return
     }
     val label = when (orderPreference) {
