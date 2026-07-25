@@ -8,8 +8,10 @@ import com.example.ruts.domain.Route
 import com.example.ruts.domain.StopOrderPreference
 import com.example.ruts.domain.StopStatus
 import com.example.ruts.domain.StopType
+import com.example.ruts.domain.filterNoteWordSuggestions
 import com.example.ruts.domain.resolveNextRouteName
 import com.example.ruts.domain.routesOnSameDay
+import com.example.ruts.domain.tokenizeNoteWords
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -47,6 +49,55 @@ class RouteRepository(context: Context) {
 
         persistRoutes(routes)
         setLastRouteId(route.id)
+        route.stops.forEach { stop -> rememberNoteWords(stop.notes) }
+    }
+
+    fun rememberNoteWords(note: String) {
+        val words = tokenizeNoteWords(note)
+        if (words.isEmpty()) return
+
+        val merged = LinkedHashSet<String>()
+        words.asReversed().forEach { word -> merged.add(word) }
+        loadNoteWords().forEach { word ->
+            if (merged.none { it.equals(word, ignoreCase = true) }) {
+                merged.add(word)
+            }
+        }
+        persistNoteWords(merged.take(MaxNoteWords))
+    }
+
+    fun getNoteWordSuggestions(prefix: String): List<String> {
+        val vocabulary = LinkedHashSet<String>()
+        loadNoteWords().forEach { vocabulary.add(it) }
+        getAllRoutes()
+            .flatMap { route -> route.stops }
+            .flatMap { stop -> tokenizeNoteWords(stop.notes) }
+            .forEach { word ->
+                if (vocabulary.none { it.equals(word, ignoreCase = true) }) {
+                    vocabulary.add(word)
+                }
+            }
+
+        return filterNoteWordSuggestions(vocabulary, prefix)
+    }
+
+    private fun loadNoteWords(): List<String> {
+        val raw = preferences.getString(NoteWordsKey, null) ?: return emptyList()
+        val json = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+        return buildList {
+            for (index in 0 until json.length()) {
+                val value = json.optString(index).trim()
+                if (value.length >= 2) add(value)
+            }
+        }
+    }
+
+    private fun persistNoteWords(words: List<String>) {
+        val payload = JSONArray()
+        words.forEach { word -> payload.put(word) }
+        preferences.edit()
+            .putString(NoteWordsKey, payload.toString())
+            .apply()
     }
 
     fun setLastRouteId(routeId: String) {
@@ -209,5 +260,7 @@ class RouteRepository(context: Context) {
         const val PrefsName = "ruts_routes"
         const val RoutesKey = "routes"
         const val LastRouteKey = "last_route_id"
+        const val NoteWordsKey = "note_words"
+        const val MaxNoteWords = 200
     }
 }

@@ -61,6 +61,7 @@ import com.example.ruts.domain.RouteOptimizer
 import com.example.ruts.domain.findReusableStopForAddress
 import com.example.ruts.domain.formatDuration
 import com.example.ruts.domain.normalizeSpokenAddress
+import com.example.ruts.domain.currentNoteWordPrefix
 import com.example.ruts.geocoding.AddressResult
 import com.example.ruts.geocoding.GeocodingHelper
 import com.example.ruts.geocoding.SearchBias
@@ -117,6 +118,7 @@ fun RouteEditorScreen(
     var optimizationState by remember { mutableStateOf(OptimizationUiState.Idle) }
     var sheetWasExpanded by remember { mutableStateOf(false) }
     var hasLocationPermission by remember { mutableStateOf(false) }
+    var noteSuggestionsVersion by remember { mutableStateOf(0) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -394,6 +396,14 @@ fun RouteEditorScreen(
         isOptimizedView -> orderedStops.firstOrNull()?.id
         else -> null
     }
+    val noteWordSuggestions = remember(
+        selectedStop?.notes,
+        noteSuggestionsVersion,
+    ) {
+        repository.getNoteWordSuggestions(
+            currentNoteWordPrefix(selectedStop?.notes.orEmpty()),
+        )
+    }
 
     LaunchedEffect(currentRoute?.id) {
         if (currentRoute?.stops?.isEmpty() == true) {
@@ -534,6 +544,11 @@ fun RouteEditorScreen(
                                     },
                                     onDelete = { deleteStop(selectedStop.id) },
                                     onBack = { returnToOverview(expandSheet = true) },
+                                    noteSuggestions = noteWordSuggestions,
+                                    onNoteWordsLearned = { note ->
+                                        repository.rememberNoteWords(note)
+                                        noteSuggestionsVersion += 1
+                                    },
                                 )
                             }
 

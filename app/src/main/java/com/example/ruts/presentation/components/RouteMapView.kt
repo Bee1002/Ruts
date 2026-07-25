@@ -73,7 +73,6 @@ private val MinimalStreetTileSource = XYTileSource(
 
 private const val MAP_BACKGROUND_COLOR = "#FAFAFA"
 
-private const val ACTIVE_STOP_ZOOM = 16.0
 private const val OVERVIEW_ZOOM = 15.0
 // ~65% opacity — lets street labels show through like Google Maps navigation
 private const val ROUTE_LINE_COLOR = 0xA64285F4.toInt()
@@ -157,6 +156,7 @@ private fun OsmdroidRouteMapView(
             }
         }
     }
+    var previousActiveStopId by remember { mutableStateOf<String?>(null) }
 
     val routeWaypoints = remember(drawRoutePath, roundTrip, startLocation, stops) {
         if (!drawRoutePath || startLocation == null) {
@@ -204,13 +204,21 @@ private fun OsmdroidRouteMapView(
 
     LaunchedEffect(cameraSignature, mapView) {
         val map = mapView ?: return@LaunchedEffect
+        val deselectedStop = previousActiveStopId != null && activeStopId == null
+        previousActiveStopId = activeStopId
+
         val activeStop = stops.firstOrNull { it.id == activeStopId }
         val activePoint = activeStop?.location ?: focusPoint
 
         if (activePoint != null) {
+            // Pan only: keep the user's current zoom while editing nearby stops.
             val target = OsmGeoPoint(activePoint.latitude, activePoint.longitude)
             map.controller.animateTo(target)
-            map.controller.setZoom(ACTIVE_STOP_ZOOM)
+            return@LaunchedEffect
+        }
+
+        if (deselectedStop) {
+            // User collapsed the sheet to keep editing on the map — preserve zoom.
             return@LaunchedEffect
         }
 
@@ -418,6 +426,7 @@ private fun VectorRouteMapView(
             }
         }
     }
+    var previousActiveStopId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(routePathSignature, osrmUserAgent) {
         routedRoutePath = null
@@ -472,6 +481,9 @@ private fun VectorRouteMapView(
         val map = vectorMap ?: return@LaunchedEffect
         if (!isStyleReady) return@LaunchedEffect
 
+        val deselectedStop = previousActiveStopId != null && activeStopId == null
+        previousActiveStopId = activeStopId
+
         focusVectorCamera(
             map = map,
             activePoint = stops.firstOrNull { it.id == activeStopId }?.location ?: focusPoint,
@@ -479,6 +491,7 @@ private fun VectorRouteMapView(
                 startLocation?.let { add(it) }
                 addAll(stops.mapNotNull { it.location })
             },
+            preserveZoom = deselectedStop,
         )
     }
 
@@ -649,13 +662,17 @@ private fun focusVectorCamera(
     map: MapLibreMap,
     activePoint: GeoPoint?,
     points: List<GeoPoint>,
+    preserveZoom: Boolean = false,
 ) {
     if (activePoint != null) {
+        // Pan only: keep the user's current zoom while editing nearby stops.
         map.animateCamera(
-            CameraUpdateFactory.newLatLngZoom(activePoint.toLatLng(), ACTIVE_STOP_ZOOM),
+            CameraUpdateFactory.newLatLng(activePoint.toLatLng()),
         )
         return
     }
+
+    if (preserveZoom) return
 
     if (points.isEmpty()) return
 

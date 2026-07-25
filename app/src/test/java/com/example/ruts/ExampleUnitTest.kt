@@ -284,4 +284,19 @@ class ExampleUnitTest {
             normalizeSpokenAddress("calle mayor numero tres alcala de henares"),
         )
     }
+
+    @Test
+    fun normalizeSpokenAddressImpliesCallePrefix() {
+        assertEquals("calle mayor", normalizeSpokenAddress("mayor"))
+        assertEquals("calle mayor 2", normalizeSpokenAddress("mayor 2"))
+        assertEquals("calle mayor 2", normalizeSpokenAddress("mayor dos"))
+        assertEquals(
+            "calle mayor 2 alcala de henares",
+            normalizeSpokenAddress("mayor dos alcala de henares"),
+        )
+        assertEquals(
+            "avenida de castilla 11 alcala",
+            normalizeSpokenAddress("avenida de castilla once alcala"),
+        )
+    }
 }

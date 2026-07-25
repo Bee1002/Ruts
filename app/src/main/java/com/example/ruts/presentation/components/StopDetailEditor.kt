@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,14 +34,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ruts.domain.DeliveryStop
 import com.example.ruts.domain.StopOrderPreference
 import com.example.ruts.domain.StopType
+import com.example.ruts.domain.currentNoteWordPrefix
+import com.example.ruts.domain.replaceCurrentNoteWord
 import com.example.ruts.ui.theme.AccentBlue
 import com.example.ruts.ui.theme.AccentPurple
 import com.example.ruts.ui.theme.stopAccentColor
@@ -66,6 +75,8 @@ fun StopDetailEditor(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     headerActions: (@Composable () -> Unit)? = null,
+    noteSuggestions: List<String> = emptyList(),
+    onNoteWordsLearned: ((String) -> Unit)? = null,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -106,6 +117,8 @@ fun StopDetailEditor(
         NotesRow(
             notes = stop.notes,
             onNotesChange = onNotesChange,
+            noteWordSuggestions = noteSuggestions,
+            onNoteWordsLearned = onNoteWordsLearned,
         )
 
         HorizontalDivider(color = Border)
@@ -342,35 +355,87 @@ private fun TagChip(
 private fun NotesRow(
     notes: String,
     onNotesChange: (String) -> Unit,
+    noteWordSuggestions: List<String>,
+    onNoteWordsLearned: ((String) -> Unit)?,
 ) {
-    Row(
+    var notesFocused by remember { mutableStateOf(false) }
+    val currentWordPrefix = remember(notes) { currentNoteWordPrefix(notes) }
+    val matchingWords = remember(currentWordPrefix, noteWordSuggestions, notesFocused) {
+        if (!notesFocused || currentWordPrefix.length < 2) {
+            emptyList()
+        } else {
+            noteWordSuggestions
+        }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedTextField(
-            value = notes,
-            onValueChange = onNotesChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Añadir notas", color = TextSecondary) },
-            minLines = 1,
-            maxLines = 3,
-            colors = RutsUi.textFieldColors,
-            shape = FieldShape,
-        )
-        Icon(
-            Icons.Default.Key,
-            contentDescription = null,
-            tint = TextSecondary,
-            modifier = Modifier.padding(start = 8.dp),
-        )
-        Icon(
-            Icons.Default.AddAPhoto,
-            contentDescription = null,
-            tint = TextSecondary,
-            modifier = Modifier.padding(start = 8.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = notes,
+                onValueChange = onNotesChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged { focusState ->
+                        val hadFocus = notesFocused
+                        notesFocused = focusState.isFocused
+                        if (hadFocus && !focusState.isFocused) {
+                            onNoteWordsLearned?.invoke(notes)
+                        }
+                    },
+                placeholder = { Text("Añadir notas", color = TextSecondary) },
+                minLines = 1,
+                maxLines = 3,
+                colors = RutsUi.textFieldColors,
+                shape = FieldShape,
+            )
+            Icon(
+                Icons.Default.Key,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+            Icon(
+                Icons.Default.AddAPhoto,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+
+        if (matchingWords.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                matchingWords.forEach { word ->
+                    Text(
+                        text = word,
+                        modifier = Modifier
+                            .clip(ChipShape)
+                            .border(1.dp, Border, ChipShape)
+                            .background(SurfaceCard)
+                            .clickable {
+                                val completed = replaceCurrentNoteWord(notes, word)
+                                onNotesChange("$completed ")
+                                onNoteWordsLearned?.invoke("$completed ")
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = White,
+                    )
+                }
+            }
+        }
     }
 }
 

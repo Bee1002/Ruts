@@ -67,6 +67,7 @@ import com.example.ruts.domain.formatTime
 import com.example.ruts.domain.RouteEstimator
 import com.example.ruts.domain.routeDisplayTitle
 import com.example.ruts.domain.nextPendingStopAfter
+import com.example.ruts.domain.currentNoteWordPrefix
 import com.example.ruts.geocoding.GeocodingHelper
 import com.example.ruts.location.LocationHelper
 import com.example.ruts.maps.MapsNavigator
@@ -115,6 +116,7 @@ fun RouteDetailScreen(
     var pendingRouteChangeOriginalStops by remember { mutableStateOf<Map<String, DeliveryStop>>(emptyMap()) }
     var showApplyRouteChangesDialog by remember { mutableStateOf(false) }
     var useCompactSheetPeek by remember { mutableStateOf(false) }
+    var noteSuggestionsVersion by remember { mutableStateOf(0) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -436,6 +438,14 @@ fun RouteDetailScreen(
                         )
                     },
                     sheetContent = {
+                        val noteWordSuggestions = remember(
+                            activeStop?.notes,
+                            noteSuggestionsVersion,
+                        ) {
+                            repository.getNoteWordSuggestions(
+                                currentNoteWordPrefix(activeStop?.notes.orEmpty()),
+                            )
+                        }
                         RouteWorkSheet(
                             route = currentRoute,
                             activeStop = activeStop,
@@ -451,6 +461,11 @@ fun RouteDetailScreen(
                             activeStopSubtitle = activeStopSubtitle,
                             editingStopId = editingStopId,
                             activeStatusChangedAtMillis = statusChangedAtMillis[activeStop?.id],
+                            noteWordSuggestions = noteWordSuggestions,
+                            onNoteWordsLearned = { note ->
+                                repository.rememberNoteWords(note)
+                                noteSuggestionsVersion += 1
+                            },
                             onNavigate = {
                                 if (activeStop != null) {
                                     MapsNavigator.openNavigation(context, activeStop)
@@ -673,6 +688,8 @@ private fun RouteWorkSheet(
     activeStopSubtitle: String?,
     editingStopId: String?,
     activeStatusChangedAtMillis: Long?,
+    noteWordSuggestions: List<String>,
+    onNoteWordsLearned: (String) -> Unit,
     onNavigate: () -> Unit,
     onDelivered: () -> Unit,
     onFailed: () -> Unit,
@@ -749,6 +766,8 @@ private fun RouteWorkSheet(
                     },
                     onDelete = { onDeleteStop(activeStop) },
                     onBack = onCancelEdit,
+                    noteSuggestions = noteWordSuggestions,
+                    onNoteWordsLearned = onNoteWordsLearned,
                 )
             } else {
                 CompletedStopDetailView(
@@ -796,6 +815,8 @@ private fun RouteWorkSheet(
                         },
                         onDelete = { onDeleteStop(activeStop) },
                         onBack = onCancelEdit,
+                        noteSuggestions = noteWordSuggestions,
+                        onNoteWordsLearned = onNoteWordsLearned,
                     )
                 }
 
